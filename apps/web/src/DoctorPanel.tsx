@@ -4,7 +4,7 @@ import { Api, json, downloadFile, postForm, fmtDate, fmtDay, fmtSize, label } fr
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
-import { DoctorPhoto } from "./extras";
+import { DoctorPhoto, DirectMessages } from "./extras";
 
 const PRESCRIBABLE = ["awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "completed", "follow_up_required"];
 const SCHEDULABLE = ["requested", "awaiting_records", "awaiting_tests", "follow_up_required"];
@@ -16,14 +16,15 @@ const emptyItem = () => ({ brand: "", generic: "", strength: "", form: "Tablet",
 export default function DoctorPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "doctor");
-  useEffect(() => { const f = () => setTab("appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
+  useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["profile", "My doctor profile"]]} />
+    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "requests" && <Requests api={api} setMessage={setMessage} />}
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
+    {tab === "messages" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "profile" && <DoctorProfile api={api} token={token} onToken={onToken} setMessage={setMessage} />}
   </div>;
 }
@@ -223,7 +224,7 @@ function DoctorReportReview({ api, token, setMessage }: { api: Api; token: strin
   const [reports, setReports] = useState<any[]>([]); const [comments, setComments] = useState<Record<string, string>>({}); const [rxFor, setRxFor] = useState(""); const [expl, setExpl] = useState<Record<string, string>>({}); const [tst, setTst] = useState<Record<string, string>>({}); const [show, setShow] = useState<"todo" | "done" | "all">("todo");
   async function load() { try { const d = await api("/reports/mine"); setReports((d.reports || []).filter((r: any) => r.doctorId)); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
-  async function review(id: string, action: string) { try { await api(`/reports/${id}/review`, { method: "POST", body: json({ action, comment: comments[id] || "", ...(expl[id] !== undefined ? { explanation: expl[id] } : {}), ...(tst[id] !== undefined ? { tests: tst[id] } : {}) }) }); setMessage(action === "approve" ? "Report approved. You can now write a prescription from it." : `Report ${action.replace("_", " ")} successfully.`); load(); } catch (e: any) { setMessage(e.message); } }
+  async function review(id: string, action: string) { try { await api(`/reports/${id}/review`, { method: "POST", body: json({ action, comment: comments[id] || "", ...(expl[id] !== undefined ? { explanation: expl[id] } : {}), ...(tst[id] !== undefined ? { tests: tst[id] } : {}) }) }); setMessage(action === "approve" ? "Report approved. Moved to Reviewed history." : `Report ${action.replace("_", " ")} successfully.`); if (["approve","reject"].includes(action)) { setRxFor(""); setComments((v)=>{const n={...v};delete n[id];return n;}); } await load(); } catch (e: any) { setMessage(e.message); } }
   const list = reports.filter((r) => (show === "all" ? true : show === "todo" ? REVIEW_OPEN.includes(r.status) : REVIEW_DONE.includes(r.status) || r.status === "rejected"));
   const dl = (id: string, name: string) => downloadFile(token, id, name).catch((e) => setMessage(e.message));
   return <div className="grid"><article className="full"><h3>Reports</h3>

@@ -2,9 +2,9 @@
 
 **Your Health, Our Priority**
 
-This repository provides a functional software MVP foundation for a Bangladesh-first healthcare platform.
+This repository provides a software MVP foundation for a Bangladesh-first healthcare platform. The V3.6.4 guest-room work is a **release candidate**, not a production certification.
 
-See `CHANGELOG_V2_2.md` for the latest UI/deployment fixes, `CHANGELOG_V2_1.md` for previous fixes, and `docs/PREDEPLOY_CHECKLIST.md` before deployment.
+See `CHANGELOG_V3_6_4_GUEST_ROOM.md` for the latest guest-room changes and `docs/V3_6_4_RELEASE_VALIDATION.md` for exact validation status. Review `docs/PREDEPLOY_CHECKLIST.md` before deployment.
 
 ## Included modules
 - Separate Patient, Doctor and Admin roles
@@ -14,6 +14,7 @@ See `CHANGELOG_V2_2.md` for the latest UI/deployment fixes, `CHANGELOG_V2_1.md` 
 - Secure admin bootstrap from environment variables (no default password)
 - Appointment request and clinician status workflow
 - Appointment-linked patient/doctor messaging API
+- Time-limited guest consultation room with private text chat and peer-to-peer audio/video signaling
 - Private report/document upload and access-controlled download
 - OpenRouter server-side integration endpoint (informational only)
 - Bangladesh medicine catalogue import pipeline with source provenance and verification gate
@@ -60,9 +61,13 @@ npm run dev
 Set `VITE_API_URL=http://localhost:4000` for local development. In production, set `VITE_API_URL` to the deployed API service URL and rebuild the frontend; the app no longer silently falls back to localhost when the variable is missing.
 
 ## Admin first-time setup
-For this private package, `apps/api/.env` contains the initial Admin ID and password supplied by the owner. The API loads these values at startup and creates the Admin account in MongoDB if it does not already exist. After first login, change the password from the Admin Security panel; the new password is stored as a password hash in MongoDB and remains after restarts. Keep this ZIP and `.env` private. Do not upload it to a public GitHub repository or share it. For Render deployment, enter `ADMIN_EMAIL` and `ADMIN_PASSWORD` as private Environment Variables in the API service dashboard; `.env` files are excluded from Git publishing.
+No `.env` file or initial Admin password is included in this ZIP. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` as private environment variables in the API service. The API creates the initial Super Admin on startup if that email does not already exist. Use a unique password of at least 14 characters and change it after first login. Never commit secrets or share them in chat.
 
 On API startup, if `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set, the system creates the first Super Admin if that email does not already exist. Use a unique strong password. Change it after first login. Never commit `.env`.
+
+## Guest consultation room
+
+The Admin creates a time-limited consultation link and assigns an active doctor. The patient opens the link in a browser; the assigned doctor (or issuing Admin) must open the same link while signed in to join as clinician. The guest room supports text messages and browser WebRTC audio/video signaling. Configure `TURN_URLS` and `TURN_SHARED_SECRET` on the API service for time-limited TURN credentials; STUN-only calls may fail on some networks. Guest rooms do not create permanent patient accounts or medical records.
 
 ## Public repository safety
 

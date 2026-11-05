@@ -5,7 +5,7 @@ import ChatAI, { FindingsList, ReportView } from "./ChatAI";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
-import { DoctorPicker } from "./extras";
+import { DoctorPicker, DirectMessages } from "./extras";
 
 const CANCELLABLE = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "follow_up_required"];
 const ACTIVE_CHAT = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "follow_up_required", "completed"];
@@ -13,12 +13,13 @@ const ACTIVE_CHAT = ["requested", "awaiting_records", "awaiting_tests", "confirm
 export default function PatientPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "patient");
-  useEffect(() => { const f = () => setTab("appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
+  useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
+    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
+    {tab === "messages" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "nearby" && <NearbyCare />}
     {tab === "rx" && <MyPrescriptions api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}

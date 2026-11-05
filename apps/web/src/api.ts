@@ -23,7 +23,8 @@ export function makeApi(token: string): Api {
     let d: any = {};
     try { d = text ? JSON.parse(text) : {}; } catch { d = {}; }
     if (!r.ok) {
-      const msg = d.error || d.message || (r.status === 413 ? "File is too large." : r.status === 502 || r.status === 504 ? "Server timed out while reading the report. Try a clearer, smaller photo (under 2 MB)." : r.status === 503 ? "AI service is temporarily unavailable. Try again in a minute." : r.status >= 500 ? "Server error while analyzing. Please try again." : "Request failed");
+      const baseMsg = d.error || d.message || (r.status === 413 ? "File is too large." : r.status === 502 || r.status === 504 ? "Server timed out while reading the report. Try a clearer, smaller photo (under 2 MB)." : r.status === 503 ? "AI service is temporarily unavailable. Try again in a minute." : r.status >= 500 ? "Server error. Please try again." : "Request failed");
+      const msg = r.status >= 500 && d.requestId ? `${baseMsg} (Reference: ${d.requestId})` : baseMsg;
       const e: any = new Error(msg); e.data = d; e.status = r.status; throw e;
     }
     return d;

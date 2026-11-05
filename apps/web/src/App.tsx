@@ -7,6 +7,7 @@ import AdminPanel from "./AdminPanel";
 import DoctorApply from "./DoctorApply";
 import { AlertCenter } from "./extras";
 import { BannerSlider, BannerContext } from "./common";
+import GuestConsultRoom from "./GuestConsultRoom";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 const norm = (u: any): User => ({ ...u, id: u.id || u._id });
@@ -144,4 +145,4 @@ function ResetPassword() {
     {ok && <a className="bannerlink" href="/">Continue</a>}</div></div>;
 }
 
-export default function App() { return window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }
+export default function App() { const q=new URLSearchParams(window.location.search); return q.has("consult") ? <GuestConsultRoom /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }

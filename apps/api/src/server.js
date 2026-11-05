@@ -32,7 +32,7 @@ app.use((err,req,res,_next)=>{
   if(err.name==="CastError") return res.status(400).json({error:"Invalid identifier"});
   if(err.code==="STORED_FILE_MISSING" || err.status===410) return res.status(410).json({error:err.message});
   if(Number.isInteger(err.status)&&err.status>=400&&err.status<500) return res.status(err.status).json({error:err.message||"Request failed"});
-  res.status(500).json({error:err.message==="Only PDF, JPG, PNG, and WEBP files are accepted"?err.message:"Internal server error"});
+  res.status(500).json({error:err.message==="Only PDF, JPG, PNG, and WEBP files are accepted"?err.message:"Internal server error",requestId});
 });
 async function start(){
   await mongoose.connect(config.mongoUri);

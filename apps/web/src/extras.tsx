@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { API, Api, json, fmtDate } from "./api";
 import { Chat } from "./common";
+import { postForm, downloadFile } from "./api";
 
 export function DoctorPhoto({ token, doctor, size = 64, v = 0 }: { token: string; doctor: any; size?: number; v?: number }) {
   const [src, setSrc] = useState("");
@@ -75,7 +76,7 @@ export function AlertCenter({ api }: { api: Api }) {
     async function poll() {
       try {
         const d = await api("/notifications/mine"); if (!live) return;
-        const unread = (d.notifications || []).filter((n: any) => !n.readAt && ["incoming_call", "new_message", "missed_call"].includes(n.type));
+        const unread = (d.notifications || []).filter((n: any) => !n.readAt && ["incoming_call", "new_message", "direct_message", "missed_call"].includes(n.type));
         const stamp = (n: any) => n._id + ":" + (n.count || 1) + ":" + n.createdAt;
         const fresh = unread.filter((n: any) => !known.current.has(stamp(n)));
         unread.forEach((n: any) => known.current.add(stamp(n)));
@@ -102,7 +103,7 @@ export function AlertCenter({ api }: { api: Api }) {
   async function open(n: any, call: boolean) {
     api(`/notifications/${n._id}/read`, { method: "POST", body: json({}) }).catch(() => {});
     setCalls((c) => c.filter((x) => x._id !== n._id)); setToasts((t) => t.filter((x) => x._id !== n._id));
-    const detail = { appointmentId: n.resourceId, kind: call ? "call" : "chat" };
+    const detail = { appointmentId: n.resourceId, conversationId: n.resourceType === "DirectConversation" ? n.resourceId : "", kind: call ? "call" : n.resourceType === "DirectConversation" ? "direct" : "chat" };
     (window as any).__medaiOpen = detail; window.dispatchEvent(new CustomEvent("medai-open", { detail })); window.dispatchEvent(new Event("medai-badges"));
   }
   const dismiss = (n: any) => { api(`/notifications/${n._id}/read`, { method: "POST", body: json({}) }).catch(() => {}); setCalls((c) => c.filter((x) => x._id !== n._id)); setToasts((t) => t.filter((x) => x._id !== n._id)); window.dispatchEvent(new Event("medai-badges")); };
@@ -172,4 +173,36 @@ function AdminCallObserver({ api, appt, onLeave }: { api: Api; appt: any; onLeav
     <div className="obsgrid">{targets.map(([id, name]) => id && <div key={id} className="obscell"><video ref={(el) => { vids.current[id] = el; }} autoPlay playsInline controls />
       <div className="row"><b>{name}</b><small>{status[id] || ""}</small><button className="outline" onClick={() => dial(id).catch(() => {})}>Retry</button></div></div>)}</div>
     <button className="danger" onClick={onLeave}>Leave call</button></div>;
+}
+
+
+// Direct inbox for Admin <-> Patient and Admin <-> Doctor messages.
+export function DirectMessages({ api, token, user, setMessage }: { api: Api; token: string; user: any; setMessage: (s: string) => void }) {
+  const [rows,setRows]=useState<any[]>([]); const [selected,setSelected]=useState<any>(null); const [msgs,setMsgs]=useState<any[]>([]);
+  const [body,setBody]=useState(""); const [pending,setPending]=useState<any[]>([]); const [busy,setBusy]=useState(false);
+  const [q,setQ]=useState(""); const [role,setRole]=useState("patient"); const [matches,setMatches]=useState<any[]>([]);
+  async function load(){try{const d=await api("/direct-conversations/mine");const list=d.conversations||[];setRows(list);setSelected((cur:any)=>cur?(list.find((x:any)=>x._id===cur._id)||cur):null);}catch(e:any){setMessage(e.message);}}
+  async function loadMsgs(id:string){try{const d=await api(`/direct-conversations/${id}/messages`);setMsgs(d.messages||[]);window.dispatchEvent(new Event("medai-badges"));}catch(e:any){setMessage(e.message);}}
+  useEffect(()=>{load();const t=setInterval(load,8000);return()=>clearInterval(t);},[]);
+  useEffect(()=>{const f=()=>{const d=(window as any).__medaiOpen;if(d?.kind==="direct"&&d.conversationId){setSelected({_id:d.conversationId,participants:[]});load();(window as any).__medaiOpen=null;}};f();window.addEventListener("medai-open",f);return()=>window.removeEventListener("medai-open",f);},[]);
+  useEffect(()=>{if(!selected)return;loadMsgs(selected._id);const t=setInterval(()=>loadMsgs(selected._id),3500);return()=>clearInterval(t);},[selected?._id]);
+  async function search(){if(user.role!=="admin")return;try{const d=await api(`/admin/users?role=${role}&q=${encodeURIComponent(q)}`);setMatches(d.users||[]);}catch(e:any){setMessage(e.message);}}
+  async function start(id:string){try{const d=await api("/direct-conversations",{method:"POST",body:json({userId:id})});await load();setSelected(d.conversation);setMatches([]);}catch(e:any){setMessage(e.message);}}
+  async function pickFiles(e:any){const fs:FileList|null=e.target.files;if(!fs?.length)return;setBusy(true);try{for(const f of Array.from(fs).slice(0,3)){const fd=new FormData();fd.append("file",f);fd.append("category","chat_attachment");const u=await postForm("/files/upload",fd,token);const kind=f.type.startsWith("image/")?"image":f.type.startsWith("audio/")?"audio":f.type.startsWith("video/")?"video":"file";setPending(p=>[...p,{fileId:u.file.id,originalName:f.name,mimeType:f.type,kind,size:f.size}]);}}catch(e:any){setMessage(e.message);}finally{setBusy(false);e.target.value="";}}
+  async function send(e:any){e.preventDefault();if(!body.trim()&&!pending.length)return;setBusy(true);try{await api(`/direct-conversations/${selected._id}/messages`,{method:"POST",body:json({body:body.trim(),attachments:pending})});setBody("");setPending([]);await loadMsgs(selected._id);}catch(x:any){setMessage(x.message);}finally{setBusy(false);}}
+  function who(c:any){return (c.participants||[]).find((p:any)=>String(p._id||p)!==String(user.id));}
+  function attachment(a:any){const id=a.fileId?._id||a.fileId;if(!id)return null;return <button className="outline" type="button" onClick={()=>downloadFile(token,id,a.originalName||a.kind).catch((e:any)=>setMessage(e.message))}>{a.kind==="image"?"🖼️":a.kind==="audio"?"🎵":"🎬"} {a.originalName||a.kind}</button>;}
+  return <div className="grid"><article><h3>Direct messages</h3>{user.role==="admin"&&<><div className="row"><select value={role} onChange={e=>setRole(e.target.value)}><option value="patient">Patient</option><option value="doctor">Doctor</option></select><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name / email"/><button className="outline" onClick={search}>Search</button></div>{matches.map(m=><button className="item" key={m._id} onClick={()=>start(m._id)}>{m.name} · {m.email} <small>Start chat</small></button>)}</>}
+    <button className="outline" onClick={load}>↻ Refresh</button>{rows.map(c=><button key={c._id} className={'item convitem'+(selected?._id===c._id?' on':'')} onClick={()=>setSelected(c)}><b>{who(c)?.name||"Conversation"}</b><small>{who(c)?.role||""} · {new Date(c.lastMessageAt||c.updatedAt).toLocaleString()}</small></button>)}{!rows.length&&<p className="muted">No conversations yet.</p>}</article>
+    <article><h3>{selected?`Chat with ${who(selected)?.name||"user"}`:"Select a conversation"}</h3>{selected?<><div className="chatlog">{msgs.map(m=><div className={'bubble'+(String(m.senderId?._id)===String(user.id)?' me':'')} key={m._id}><b>{m.senderId?.name||"User"}</b>{m.body!=="(attachment)"&&<span>{m.body}</span>}{(m.attachments||[]).map((a:any,i:number)=><span key={i}>{attachment(a)}</span>)}<small>{new Date(m.createdAt).toLocaleString()}</small></div>)}</div>
+      <form className="row" onSubmit={send}><input value={body} onChange={e=>setBody(e.target.value)} placeholder="Write a message" maxLength={5000}/><label className="outline">📎 Media<input hidden type="file" multiple accept="image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/webm,audio/wav,video/mp4,video/webm,video/quicktime" onChange={pickFiles}/></label><button className="primary" disabled={busy||(!body.trim()&&!pending.length)}>Send</button></form>{pending.map((a,i)=><p key={i} className="muted">{a.kind}: {a.originalName}</p>)}</>:<p className="muted">Select a message thread. Patients and doctors can message the admin directly.</p>}</article></div>;
+}
+
+export function TemporaryConsultAdmin({api,setMessage}:{api:Api;setMessage:(s:string)=>void}){
+ const [name,setName]=useState("");const [phone,setPhone]=useState("");const [minutes,setMinutes]=useState("60");const [doctorId,setDoctorId]=useState("");const [doctors,setDoctors]=useState<any[]>([]);const [link,setLink]=useState("");const [rows,setRows]=useState<any[]>([]);
+ async function load(){try{const [d,c]=await Promise.all([api("/doctors"),api("/admin/temporary-consults")]);setDoctors(d.doctors||[]);setRows(c.consults||[]);}catch(e:any){setMessage(e.message);}}
+ useEffect(()=>{load();},[]);
+ async function create(e:any){e.preventDefault();try{const d=await api("/admin/temporary-consults",{method:"POST",body:json({patientName:name,patientPhone:phone,minutes:Number(minutes),doctorId:doctorId||undefined})});setLink(d.link);setMessage(d.message);load();}catch(e:any){setMessage(e.message);}}
+ async function close(id:string){try{await api(`/admin/temporary-consults/${id}/close`,{method:"POST",body:json({})});setMessage("Temporary access closed.");load();}catch(e:any){setMessage(e.message);}}
+ return <div className="grid"><article className="full"><h3>Temporary consultation access</h3><p className="muted">Creates a time-limited guest room with private text messaging and peer-to-peer audio/video calling. Video connectivity may require TURN for restrictive networks.</p><form onSubmit={create}><input placeholder="Patient name (optional)" value={name} onChange={e=>setName(e.target.value)}/><input placeholder="Phone (optional)" value={phone} onChange={e=>setPhone(e.target.value)}/><label>Assign doctor<select value={doctorId} onChange={e=>setDoctorId(e.target.value)}><option value="">Choose later / unassigned</option>{doctors.map(d=><option key={d._id} value={d._id}>{d.name}</option>)}</select></label><label>Link validity<select value={minutes} onChange={e=>setMinutes(e.target.value)}><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option></select></label><button className="primary">Create temporary link</button></form>{link&&<div className="item"><b>Copy this link now (shown once)</b><p>{link}</p><button className="outline" onClick={()=>navigator.clipboard.writeText(link).then(()=>setMessage("Link copied."))}>Copy link</button></div>}</article><article className="full"><h3>Issued links</h3>{rows.map(r=><div className="item" key={r._id}><b>{r.patientName}</b> · {r.doctorId?.name||"No doctor assigned"}<p>{r.status} · Expires {new Date(r.expiresAt).toLocaleString()}</p>{r.status==="active"&&<button className="danger" onClick={()=>close(r._id)}>Close now</button>}</div>)}</article></div>;
 }

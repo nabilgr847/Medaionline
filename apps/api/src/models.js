@@ -23,6 +23,10 @@ const userSchema = new Schema({
     clinicName:String, verificationNote:String, verifiedAt:Date, signatureFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}, signatureUpdatedAt:Date, availabilitySlots:[{day:Number,start:String,end:String}], unavailablePeriods:[{start:Date,end:Date,reason:String}]
   }
 }, {timestamps:true});
+userSchema.index({role:1,status:1,createdAt:-1});
+userSchema.index({name:1});
+userSchema.index({email:1});
+userSchema.index({phone:1});
 
 const fileSchema = new Schema({
   ownerId:{type:Schema.Types.ObjectId, ref:"User", required:true},
@@ -49,7 +53,7 @@ const appointmentSchema = new Schema({
 appointmentSchema.index({doctorId:1, scheduledAt:1},{unique:true,partialFilterExpression:{doctorId:{$type:"objectId"},scheduledAt:{$type:"date"},status:{$in:["confirmed","waiting_room","in_progress"]}}});
 
 const messageSchema = new Schema({
-  appointmentId:{type:Schema.Types.ObjectId, ref:"Appointment", required:true},
+  appointmentId:{type:Schema.Types.ObjectId, ref:"Appointment", default:null},
   senderId:{type:Schema.Types.ObjectId, ref:"User", required:true},
   body:{type:String, default:"", maxlength:5000},
   attachments:[{fileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, originalName:String, mimeType:String, kind:{type:String,enum:["image","audio","video","file"],default:"file"}, size:Number}]
@@ -78,6 +82,40 @@ export const User = model("User", userSchema);
 export const PrivateFile = model("PrivateFile", fileSchema);
 export const Appointment = model("Appointment", appointmentSchema);
 export const Message = model("Message", messageSchema);
+const directConversationSchema = new Schema({
+  participants:[{type:Schema.Types.ObjectId,ref:"User",required:true}],
+  participantKey:{type:String,required:true,unique:true,index:true},
+  lastMessageAt:{type:Date,default:Date.now}
+},{timestamps:true});
+directConversationSchema.index({participants:1,lastMessageAt:-1});
+export const DirectConversation = model("DirectConversation",directConversationSchema);
+const directMessageSchema = new Schema({
+  conversationId:{type:Schema.Types.ObjectId,ref:"DirectConversation",required:true,index:true},
+  senderId:{type:Schema.Types.ObjectId,ref:"User",required:true},
+  body:{type:String,default:"",maxlength:5000},
+  attachments:[{fileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},originalName:String,mimeType:String,kind:{type:String,enum:["image","audio","video","file"],default:"file"},size:Number}]
+},{timestamps:true});
+directMessageSchema.index({conversationId:1,createdAt:1});
+export const DirectMessage = model("DirectMessage",directMessageSchema);
+const temporaryConsultSchema = new Schema({
+  tokenHash:{type:String,required:true,unique:true}, createdBy:{type:Schema.Types.ObjectId,ref:"User",required:true},
+  doctorId:{type:Schema.Types.ObjectId,ref:"User",default:null}, patientName:{type:String,default:"Guest patient",maxlength:120},
+  patientPhone:{type:String,default:"",maxlength:30}, expiresAt:{type:Date,required:true},
+  messages:[{senderRole:{type:String,enum:["guest","doctor","admin"]},senderName:{type:String,maxlength:120},body:{type:String,maxlength:3000},createdAt:{type:Date,default:Date.now}}],
+  status:{type:String,enum:["active","closed","expired"],default:"active",index:true}, closedAt:Date
+},{timestamps:true});
+temporaryConsultSchema.index({expiresAt:1},{expireAfterSeconds:0});
+export const TemporaryConsult = model("TemporaryConsult",temporaryConsultSchema);
+const temporaryCallSignalSchema = new Schema({
+  consultId:{type:Schema.Types.ObjectId,ref:"TemporaryConsult",required:true,index:true},
+  senderRole:{type:String,enum:["guest","doctor","admin"],required:true},
+  senderName:{type:String,default:"Guest"}, type:{type:String,enum:["offer","answer","ice","hangup"],required:true},
+  payload:{type:Schema.Types.Mixed}
+},{timestamps:true});
+temporaryCallSignalSchema.index({createdAt:1},{expireAfterSeconds:14400});
+temporaryCallSignalSchema.index({consultId:1,createdAt:1});
+export const TemporaryCallSignal = model("TemporaryCallSignal",temporaryCallSignalSchema);
+
 export const AuditEvent = model("AuditEvent", auditSchema);
 export const Medicine = model("Medicine", medicineSchema);
 const prescriptionSchema = new Schema({

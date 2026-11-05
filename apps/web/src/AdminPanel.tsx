@@ -1,6 +1,6 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useState } from "react";
-import { AdminConversations } from "./extras";
+import { AdminConversations, DirectMessages, TemporaryConsultAdmin } from "./extras";
 import { Api, json, downloadFile, fmtDate, fmtDay, label, parseCsv } from "./api";
 import { useBadges, Tabs, ChangePassword } from "./common";
 
@@ -8,9 +8,12 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
   const [tab, setTab] = useState("doctors");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["convos", "Messages & calls"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
+    {tab === "schedule" && <AdminSchedules api={api} setMessage={setMessage} />}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
+    {tab === "direct" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
+    {tab === "temporary" && <TemporaryConsultAdmin api={api} setMessage={setMessage} />}
     {tab === "reports" && <ReportsPanel api={api} token={token} setMessage={setMessage} />}
     {tab === "resets" && <RequestsPanel api={api} setMessage={setMessage} />}
     {tab === "users" && <Users api={api} setMessage={setMessage} />}
@@ -21,6 +24,23 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
     {tab === "banner" && <BannerEditor api={api} setMessage={setMessage} />}
     {tab === "security" && <Security api={api} onToken={onToken} setMessage={setMessage} />}
   </div>;
+}
+
+function AdminSchedules({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+  const [doctors, setDoctors] = useState<any[]>([]); const [appointments, setAppointments] = useState<any[]>([]); const [doctorId, setDoctorId] = useState("");
+  const [slots, setSlots] = useState<any[]>([]); const [day, setDay] = useState("1"); const [start, setStart] = useState("09:00"); const [end, setEnd] = useState("17:00"); const [busy, setBusy] = useState(false);
+  async function load() { try { const d = await api("/admin/schedules"); setDoctors(d.doctors || []); setAppointments(d.appointments || []); const id = doctorId || d.doctors?.[0]?._id || ""; if (id) { setDoctorId(id); setSlots(d.doctors.find((x: any) => x._id === id)?.doctorProfile?.availabilitySlots || []); } } catch (e: any) { setMessage(e.message); } }
+  useEffect(() => { load(); }, []);
+  function choose(id: string) { setDoctorId(id); setSlots(doctors.find((x) => x._id === id)?.doctorProfile?.availabilitySlots || []); }
+  function add() { if (start >= end) { setMessage("End time must be later than start time."); return; } if (slots.length >= 21) { setMessage("Maximum 21 weekly slots."); return; } setSlots([...slots, { day: Number(day), start, end }]); }
+  async function save() { setBusy(true); try { await api(`/admin/doctors/${doctorId}/availability`, { method: "PATCH", body: json({ slots }) }); setMessage("Doctor availability saved."); await load(); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
+  const selected = doctors.find((d) => d._id === doctorId);
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return <div className="grid"><article className="full"><h3>Doctor availability & schedule</h3><p className="muted">Weekly availability controls when patients can request appointments. Booked slots are shown separately below.</p>
+    <label>Doctor<select value={doctorId} onChange={(e) => choose(e.target.value)}><option value="">Select doctor</option>{doctors.map((d) => <option key={d._id} value={d._id}>Dr. {d.name} · {d.doctorProfile?.specialty || "General"}</option>)}</select></label>
+    {selected && <><h4>Available weekly slots — Dr. {selected.name}</h4>{slots.map((x, i) => <div className="row item" key={i}><b>{dayNames[x.day] || "Day"}</b><span>{x.start}–{x.end}</span><button className="danger" onClick={() => setSlots(slots.filter((_, n) => n !== i))}>Remove</button></div>)}{!slots.length && <p className="muted">No weekly availability published yet.</p>}
+      <div className="row"><select value={day} onChange={(e) => setDay(e.target.value)}>{dayNames.map((d, i) => <option key={i} value={i}>{d}</option>)}</select><input type="time" value={start} onChange={(e) => setStart(e.target.value)} /><input type="time" value={end} onChange={(e) => setEnd(e.target.value)} /><button className="outline" onClick={add}>Add slot</button></div><button className="primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save availability"}</button>
+    </>}</article><article className="full"><h3>Upcoming booked slots</h3>{appointments.filter((a) => !doctorId || (a.doctorId?._id || a.doctorId) === doctorId).map((a) => <div className="item" key={a._id}><b>{a.patientId?.name || "Patient"}</b> · Dr. {a.doctorId?.name || "Doctor"}<p>{fmtDate(a.scheduledAt)} · {label(a.status)}</p></div>)}{appointments.filter((a) => !doctorId || (a.doctorId?._id || a.doctorId) === doctorId).length === 0 && <p className="muted">No upcoming booked slots.</p>}<button className="outline" onClick={load}>↻ Refresh schedule</button></article></div>;
 }
 
 const REVIEW_LABEL: Record<string, string> = { pending: "⏳ Pending", approved: "✅ Approved", rejected: "❌ Rejected", not_submitted: "— Not submitted" };
@@ -136,14 +156,16 @@ function Review({ x, api, token, done, setMessage }: { x: any; api: Api; token: 
 
 function Users({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
   const [role, setRole] = useState("doctor"); const [users, setUsers] = useState<any[]>([]); const [q, setQ] = useState("");
-  async function load() { try { const qs = new URLSearchParams({ role }); if (q.trim()) qs.set("q", q.trim()); const d = await api(`/admin/users?` + qs.toString()); setUsers(d.users || []); } catch (e: any) { setMessage(e.message); } }
-  useEffect(() => { load(); }, [role]);
+  const [loading,setLoading]=useState(false); const requestSeq=useState({current:0})[0];
+  async function load(query=q) { const seq=++requestSeq.current; setLoading(true); try { const qs = new URLSearchParams({ role }); if (query.trim()) qs.set("q", query.trim()); const d = await api(`/admin/users?` + qs.toString()); if(seq===requestSeq.current)setUsers(d.users || []); } catch (e: any) { if(seq===requestSeq.current)setMessage(e.message); } finally { if(seq===requestSeq.current)setLoading(false); } }
+  useEffect(() => { load(""); }, [role]);
+  useEffect(() => { const value=q.trim(); if(!value){load("");return;} const t=window.setTimeout(()=>load(value),450); return ()=>window.clearTimeout(t); }, [q,role]);
   async function setStatus(id: string, status: string) { if (status === "suspended" && !confirm("Suspend this account? They will be signed out immediately.")) return; try { await api(`/admin/users/${id}/status`, { method: "POST", body: json({ status }) }); load(); } catch (e: any) { setMessage(e.message); } }
   async function resetPassword(id:string){if(!confirm("Reset this user's password? A temporary password will be shown once."))return;try{const d=await api(`/admin/users/${id}/reset-password`,{method:"POST",body:json({})});window.prompt("Copy this temporary password and share it securely. It will not be shown again:",d.temporaryPassword);setMessage("Password reset completed and audit event recorded.");}catch(e:any){setMessage(e.message);}}
   return <div className="grid"><article className="full"><h3>Users</h3>
     <div className="row"><button className={role === "doctor" ? "primary" : "outline"} onClick={() => setRole("doctor")}>Doctors</button><button className={role === "patient" ? "primary" : "outline"} onClick={() => setRole("patient")}>Patients</button>
       <input placeholder="Search name, email, phone, BMDC…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} style={{ flex: "1 1 180px" }} />
-      <button className="outline" onClick={load}>Search</button></div>
+      <button className="outline" onClick={()=>load(q)} disabled={loading}>{loading?"Searching…":"Search"}</button></div>
     {users.length === 0 && <p className="muted">No users.</p>}
     {users.map((u) => <div className="item" key={u._id}><b>{u.name}</b> · {u.email} · {label(u.status)}<p className="muted">User ID: {u._id}</p>
       {u.role === "doctor" && <p className="muted">BMDC {u.doctorProfile?.bmdcNumber} · {u.doctorProfile?.specialty}</p>}

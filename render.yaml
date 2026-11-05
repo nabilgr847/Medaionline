@@ -42,6 +42,10 @@ services:
         sync: false
       - key: APP_PUBLIC_URL
         sync: false
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_SHARED_SECRET
+        sync: false
       - key: REQUIRE_ADMIN_APPROVAL
         value: "false"
       - key: PRESCRIPTION_SIGNING_PRIVATE_KEY_BASE64

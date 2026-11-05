@@ -50,3 +50,13 @@ If staying on Render Free, use a properly configured private object-storage prov
 - Set `OPENROUTER_API_KEY` and choose `OPENROUTER_MODEL` that supports image input if patients will analyze JPG/PNG/WEBP reports. The default model may change; verify the selected model's current vision support with a non-sensitive test image before enabling the workflow.
 - The Admin Live Monitoring tab uses MongoDB-backed heartbeats and call-session records. Ensure the deployed MongoDB user can read/write the new `CallSession` collection and the application can create indexes.
 - Presence is approximate (75-second threshold); Admin call sessions disappear from the active list after 90 seconds without a heartbeat. Admin sees metadata only, never call media.
+
+## Optional TURN relay (Metered)
+For WebRTC calls, the client requests authenticated ICE configuration from `/api/webrtc/ice-servers`. Keep Metered credentials on the API service only; never place them in Vite variables or commit them to Git.
+
+Set these Environment variables on the Render API service (not the static frontend):
+- `TURN_URLS`: comma-separated TURN URLs copied from Metered Instructions (for example `turn:global.relay.metered.ca:80,turn:global.relay.metered.ca:443,turns:global.relay.metered.ca:443?transport=tcp`).
+- `TURN_USERNAME`: active Metered credential username.
+- `TURN_CREDENTIAL`: active Metered credential password.
+
+The API keeps Google STUN as the first ICE server and appends Metered TURN as a relay fallback. TURN quota is consumed only when traffic is relayed through TURN. Rotate any credential that has been exposed in screenshots or chat.

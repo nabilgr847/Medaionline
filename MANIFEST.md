@@ -41,3 +41,12 @@ Generated: 2026-11-04
 - apps/api/src/fileStorage.js, routes.js, models.js, pdf.js
 - apps/web/src/ChatAI.tsx, PatientPanel.tsx, style.css
 - CHANGELOG_V3_1.md, MANIFEST.md
+
+
+## V3.6.4 guest-room update (2026-11-06)
+- Added `apps/web/src/GuestConsultRoom.tsx` for guest/clinician room UI.
+- Updated `apps/api/src/models.js` and `apps/api/src/routes.js` for expiring guest sessions, room chat, and temporary WebRTC signaling.
+- Updated `apps/web/src/App.tsx`, `apps/web/src/extras.tsx`, and `render.yaml`.
+- Added `CHANGELOG_V3_6_4_GUEST_ROOM.md` and `docs/V3_6_4_RELEASE_VALIDATION.md`.
+- Corrected README Admin-secret guidance: no `.env` or credentials are bundled.
+- Build and integration verification remain blocked; see `docs/V3_6_4_RELEASE_VALIDATION.md`.

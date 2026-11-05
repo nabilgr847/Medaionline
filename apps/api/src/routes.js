@@ -17,7 +17,7 @@ import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
 import { checkRedFlags } from "./safety.js";
 import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
@@ -245,6 +245,24 @@ router.get("/admin/monitoring",auth,allow("admin"),wrap(async(req,res)=>{
   res.json({asOf:now,onlineUsers,activeCalls,recentActivity,onlineCounts,thresholdSeconds:75,callStaleSeconds:90});
 }));
 
+router.get("/admin/schedules",auth,allow("admin"),wrap(async(req,res)=>{
+  const doctors=await User.find({role:"doctor",status:"active"}).select("name email doctorProfile.specialty doctorProfile.availabilitySlots doctorProfile.unavailablePeriods").sort({name:1}).lean();
+  const from=new Date();
+  const appointments=await Appointment.find({doctorId:{$ne:null},scheduledAt:{$gte:from},status:{$in:["confirmed","waiting_room","in_progress"]}}).populate("patientId","name email").populate("doctorId","name").select("doctorId patientId scheduledAt status problem").sort({scheduledAt:1}).limit(500).lean();
+  res.json({doctors,appointments});
+}));
+router.patch("/admin/doctors/:id/availability",auth,allow("admin"),wrap(async(req,res)=>{
+  const slots=Array.isArray(req.body.slots)?req.body.slots:[];
+  if(slots.length>21)return res.status(400).json({error:"Maximum 21 weekly availability slots"});
+  for(const x of slots){if(!Number.isInteger(x.day)||x.day<0||x.day>6||!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.start||"")||!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.end||"")||x.start>=x.end)return res.status(400).json({error:"Invalid availability slot"});}
+  const doctor=await User.findOne({_id:req.params.id,role:"doctor",status:"active"});
+  if(!doctor)return res.status(404).json({error:"Active doctor not found"});
+  if(!doctor.doctorProfile)doctor.doctorProfile={};
+  doctor.doctorProfile.availabilitySlots=slots;await doctor.save();
+  await audit(req,"admin.doctor_availability_updated","User",doctor.id,{slotCount:slots.length});
+  res.json({slots:doctor.doctorProfile.availabilitySlots});
+}));
+
 router.get("/admin/appointments",auth,allow("admin"),wrap(async(req,res)=>{
   const appts=await Appointment.find({doctorId:{$ne:null}}).sort({updatedAt:-1}).limit(150).populate("patientId","name email").populate("doctorId","name email").select("patientId doctorId status scheduledAt consultationType problem updatedAt").lean();
   const live=await CallSession.find({status:"active",lastHeartbeatAt:{$gte:new Date(Date.now()-90000)}}).select("appointmentId").lean();
@@ -326,7 +344,7 @@ router.patch("/profile",auth,allow("patient"),wrap(async(req,res)=>{
 router.post("/files/upload",auth,upload.single("file"),validateUploads,wrap(async(req,res)=>{
   if(!req.file) return res.status(400).json({error:"File is required"});
   const category=String(req.body.category||"patient_report");
-  const allowed=req.user.role==="patient"?["patient_report","other","chat_attachment"]:req.user.role==="doctor"?["other","other_qualification","chat_attachment"]:["other"];
+  const allowed=req.user.role==="patient"?["patient_report","other","chat_attachment"]:req.user.role==="doctor"?["other","other_qualification","chat_attachment"]:["other","chat_attachment"];
   if(!allowed.includes(category)){return res.status(400).json({error:"Invalid file category"});}
   if(category==="chat_attachment"){
     const mt=req.file.mimetype||"";
@@ -367,10 +385,14 @@ router.get("/files/:id/download",auth,wrap(async(req,res)=>{
   }
   if(!permitted && file.category==="chat_attachment"){
     const msg=await Message.findOne({"attachments.fileId":file._id}).select("appointmentId");
-    if(msg){
+    if(msg?.appointmentId){
       const ap=await Appointment.findById(msg.appointmentId).select("patientId doctorId");
       permitted=!!ap && (String(ap.patientId)===String(req.user.id) || String(ap.doctorId)===String(req.user.id) || req.user.role==="admin");
       if(permitted) accessAction="chat.attachment_access";
+    }
+    if(!permitted){
+      const dm=await DirectMessage.findOne({"attachments.fileId":file._id}).select("conversationId");
+      if(dm){const conv=await DirectConversation.findOne({_id:dm.conversationId,participants:req.user.id}).select("_id");permitted=!!conv;if(permitted)accessAction="direct_chat.attachment_access";}
     }
   }
   if(!permitted) return res.status(403).json({error:"Access denied"});
@@ -483,7 +505,9 @@ router.post("/appointments/:id/messages",auth,wrap(async(req,res)=>{
   const message=await Message.create({appointmentId:appt.id,senderId:req.user.id,body:body||(attachments.length?"(attachment)":""),attachments});
   // Tell the other person. While they have not read it, several messages from one chat become ONE notification ("3 new messages").
   try{
-    const targets=isAdmin?[appt.patientId,appt.doctorId]:[String(appt.patientId)===String(req.user.id)?appt.doctorId:appt.patientId];
+    const participantTargets=isAdmin?[appt.patientId,appt.doctorId]:[String(appt.patientId)===String(req.user.id)?appt.doctorId:appt.patientId];
+    const adminTargets=isAdmin?[]:await User.find({role:"admin",status:"active"}).select("_id").lean();
+    const targets=[...new Set([...participantTargets,...adminTargets.map(x=>x._id)].filter(Boolean).map(String))];
     const preview=body||(attachments[0]?("["+attachments[0].kind+"] "+attachments[0].originalName):"");
     for(const toId of targets){
       if(!toId) continue;
@@ -754,7 +778,7 @@ router.post("/ai/medicine-suggestions",auth,allow("doctor"),aiLimiter,wrap(async
       allergyConflict:allergies.some(a=>a&&(lower.includes(a)||a.includes(lower))),
       alreadyTaking:current.some(c=>c&&(c.includes(lower)||lower.includes(c))),brands});
   }
-  await audit(req,"ai.medicine_suggestions","Appointment",appt.id,{count:out.length});
+  await audit(req,"ai.medicine_suggestions",rep?"MedicalReport":"Appointment",String((rep||appt)._id),{count:out.length});
   res.json({suggestions:out,disclaimer:"AI suggestions are options for the treating doctor only, not a prescription. Check the patient's history, allergies and current medicines yourself, and enter doses yourself."});
 }));
 
@@ -1058,15 +1082,56 @@ router.post("/appointments/:id/claim",auth,allow("doctor"),wrap(async(req,res)=>
   await audit(req,"appointment.claimed","Appointment",appt.id,{reportsAssigned:unassignedReports.length}); res.json({appointment:appt});
 }));
 
+
+function normalizeSearchText(value){return String(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9@.+_-]+/g," ").trim();}
+function editDistance(a,b){
+  if(Math.abs(a.length-b.length)>2)return 99;
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){const cur=[i];let rowMin=i;
+    for(let j=1;j<=b.length;j++){const v=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));cur[j]=v;rowMin=Math.min(rowMin,v);}
+    if(rowMin>2)return 99;prev=cur;
+  } return prev[b.length];
+}
+function fuzzyUserScore(user,q){
+  const query=normalizeSearchText(q);if(!query)return 1;
+  const fields=[user.name,user.email,user.phone,user.doctorProfile?.specialty,user.doctorProfile?.bmdcNumber].map(normalizeSearchText).filter(Boolean);
+  let best=0;
+  for(const field of fields){
+    if(field.includes(query))best=Math.max(best,100-query.length+Math.min(field.length,20));
+    const words=field.split(/\s+/);
+    for(const token of words){
+      if(token.startsWith(query))best=Math.max(best,85);
+      const d=editDistance(token,query);
+      if(d<=Math.max(1,Math.floor(query.length/4)))best=Math.max(best,70-d*10);
+    }
+  }
+  return best;
+}
 router.get("/admin/users",auth,allow("admin"),wrap(async(req,res)=>{
   const role=["patient","doctor"].includes(String(req.query.role))?String(req.query.role):"doctor";
-  const q=String(req.query.q||"").trim();
-  const filter={role,status:{$in:["active","suspended"]}};
-  if(q){
+  const q=String(req.query.q||"").trim().slice(0,100);
+  const baseFilter={role,status:{$in:["active","suspended"]}};
+  const projection="name email phone status role doctorProfile.specialty doctorProfile.bmdcNumber createdAt lastLoginAt lastSeenAt";
+  let users;
+  if(!q){
+    users=await User.find(baseFilter).select(projection).sort({createdAt:-1}).limit(200).lean();
+  }else{
     const rx=new RegExp(escapeRegex(q),"i");
-    filter.$or=[{name:rx},{email:rx},{phone:rx},{"doctorProfile.bmdcNumber":rx},{"doctorProfile.specialty":rx}];
+    const exact=await User.find({...baseFilter,$or:[{name:rx},{email:rx},{phone:rx},{"doctorProfile.bmdcNumber":rx},{"doctorProfile.specialty":rx}]}).select(projection).sort({createdAt:-1}).limit(200).lean();
+    if(exact.length>=30){users=exact;}
+    else{
+      const seen=new Set(exact.map(u=>String(u._id)));
+      const excluded=[...seen].map(id=>new mongoose.Types.ObjectId(id));
+      const initials=[...new Set(normalizeSearchText(q).split(/\s+/).filter(Boolean).map(x=>x[0]))];
+      const candidateOr=initials.flatMap(ch=>{const r=new RegExp("^"+escapeRegex(ch),"i");return [{name:r},{email:r},{phone:r},{"doctorProfile.specialty":r},{"doctorProfile.bmdcNumber":r}];});
+      const candidateFilter=candidateOr.length?{$or:candidateOr}:{};
+      let candidates=await User.find({...baseFilter,_id:{$nin:excluded},...candidateFilter}).select(projection).sort({createdAt:-1}).limit(1200).lean();
+      // Small fallback protects searches where the first typed character itself is wrong.
+      if(candidates.length<80){const found=new Set([...seen,...candidates.map(u=>String(u._id))]);const fallback=await User.find({...baseFilter,_id:{$nin:[...found].map(id=>new mongoose.Types.ObjectId(id))}}).select(projection).sort({createdAt:-1}).limit(300).lean();candidates.push(...fallback);}
+      const fuzzy=candidates.map(u=>({u,score:fuzzyUserScore(u,q)})).filter(x=>x.score>=60).sort((a,b)=>b.score-a.score||new Date(b.u.createdAt)-new Date(a.u.createdAt)).slice(0,200-exact.length).map(x=>x.u);
+      users=[...exact,...fuzzy];
+    }
   }
-  const users=await User.find(filter).select("name email phone status role doctorProfile.specialty doctorProfile.bmdcNumber createdAt lastLoginAt lastSeenAt").sort({createdAt:-1}).limit(200);
   res.json({users});
 }));
 router.post("/admin/users/:id/status",auth,allow("admin"),wrap(async(req,res)=>{
@@ -1323,6 +1388,91 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
   await report.save(); await audit(req,`medical_report.${action}`,"MedicalReport",report.id,{status:report.status});
   res.json({report:{id:report.id,status:report.status,doctorExplanation:report.doctorExplanation,advisedTests:report.advisedTests,reviewComment:report.reviewComment,rejectionReason:report.rejectionReason,finalPdfFileId:report.finalPdfFileId}});
 }));
+// Role-to-role direct messaging (doctor/admin and patient/admin). Files remain private.
+function pairKey(a,b){return [String(a),String(b)].sort().join(":");}
+router.get("/direct-conversations/mine",auth,wrap(async(req,res)=>{
+  let rows=await DirectConversation.find({participants:req.user.id}).populate("participants","name role email").sort({lastMessageAt:-1}).limit(100).lean();
+  if(req.user.role!=="admin"){
+    const admin=await User.findOne({role:"admin",status:"active"}).select("_id").lean();
+    if(admin && String(admin._id)!==String(req.user.id)){
+      const key=pairKey(req.user.id,admin._id);
+      await DirectConversation.updateOne({participantKey:key},{$setOnInsert:{participants:[req.user.id,admin._id],participantKey:key,lastMessageAt:new Date()}},{upsert:true});
+      rows=await DirectConversation.find({participants:req.user.id}).populate("participants","name role email").sort({lastMessageAt:-1}).limit(100).lean();
+    }
+  }
+  res.json({conversations:rows});
+}));
+router.post("/direct-conversations",auth,allow("admin"),wrap(async(req,res)=>{
+  const target=await User.findOne({_id:req.body.userId,role:{$in:["patient","doctor"]},status:"active"}).select("_id");
+  if(!target)return res.status(404).json({error:"Active patient or doctor not found"});
+  const key=pairKey(req.user.id,target.id);
+  const c=await DirectConversation.findOneAndUpdate({participantKey:key},{$setOnInsert:{participants:[req.user.id,target.id],participantKey:key,lastMessageAt:new Date()}},{new:true,upsert:true}).populate("participants","name role email");
+  res.status(201).json({conversation:c});
+}));
+router.get("/direct-conversations/:id/messages",auth,wrap(async(req,res)=>{
+  const c=await DirectConversation.findOne({_id:req.params.id,participants:req.user.id});
+  if(!c)return res.status(404).json({error:"Conversation not found"});
+  await Notification.updateMany({userId:req.user.id,type:"direct_message",resourceId:String(c.id),readAt:null},{$set:{readAt:new Date()}});
+  res.json({messages:await DirectMessage.find({conversationId:c.id}).populate("senderId","name role").sort({createdAt:1}).limit(500)});
+}));
+router.post("/direct-conversations/:id/messages",auth,wrap(async(req,res)=>{
+  const c=await DirectConversation.findOne({_id:req.params.id,participants:req.user.id});
+  if(!c)return res.status(404).json({error:"Conversation not found"});
+  const body=String(req.body.body||"").trim(); const raw=Array.isArray(req.body.attachments)?req.body.attachments:[];
+  if((!body&&!raw.length)||body.length>5000)return res.status(400).json({error:"Message must include text or attachments"});
+  const attachments=[];
+  for(const a of raw.slice(0,5)){const f=await PrivateFile.findOne({_id:a.fileId||a.id,ownerId:req.user.id,category:"chat_attachment"});if(!f)return res.status(400).json({error:"Invalid attachment"});const kind=/^image\//.test(f.mimeType)?"image":/^audio\//.test(f.mimeType)?"audio":/^video\//.test(f.mimeType)?"video":"file";attachments.push({fileId:f._id,originalName:f.originalName,mimeType:f.mimeType,kind,size:f.size});}
+  const m=await DirectMessage.create({conversationId:c.id,senderId:req.user.id,body:body||"(attachment)",attachments});
+  c.lastMessageAt=new Date();await c.save();
+  const recipient=c.participants.find(x=>String(x)!==String(req.user.id));
+  if(recipient){const who=req.user.role==="doctor"?`Dr. ${req.user.name}`:req.user.name;await Notification.create({userId:recipient,type:"direct_message",title:`New message from ${who}`,message:(body||"New attachment").slice(0,140),resourceType:"DirectConversation",resourceId:String(c.id)});}
+  res.status(201).json({message:m});
+}));
+// Admin-created one-time consultation access links. Raw token is returned only once; DB stores only its hash.
+router.post("/admin/temporary-consults",auth,allow("admin"),wrap(async(req,res)=>{
+  const minutes=Math.max(10,Math.min(240,Number(req.body.minutes)||60));
+  const doctor=req.body.doctorId?await User.findOne({_id:req.body.doctorId,role:"doctor",status:"active"}).select("_id"):null;
+  if(req.body.doctorId&&!doctor)return res.status(404).json({error:"Active doctor not found"});
+  const token=crypto.randomBytes(32).toString("base64url");const expiresAt=new Date(Date.now()+minutes*60000);
+  const c=await TemporaryConsult.create({tokenHash:crypto.createHash("sha256").update(token).digest("hex"),createdBy:req.user.id,doctorId:doctor?._id||null,patientName:String(req.body.patientName||"Guest patient").slice(0,120),patientPhone:String(req.body.patientPhone||"").slice(0,30),expiresAt});
+  await audit(req,"temporary_consult.created","TemporaryConsult",c.id,{expiresAt,doctorId:doctor?._id||null});
+  res.status(201).json({id:c.id,link:`${config.clientOrigin.replace(/\/$/,"")}/?consult=${token}`,expiresAt,message:"Temporary consultation link created. Copy it now; it cannot be retrieved later."});
+}));
+router.get("/admin/temporary-consults",auth,allow("admin"),wrap(async(req,res)=>{const rows=await TemporaryConsult.find({createdBy:req.user.id}).sort({createdAt:-1}).limit(100).populate("doctorId","name").select("patientName patientPhone doctorId expiresAt status createdAt").lean();res.json({consults:rows});}));
+router.post("/admin/temporary-consults/:id/close",auth,allow("admin"),wrap(async(req,res)=>{const c=await TemporaryConsult.findOneAndUpdate({_id:req.params.id,createdBy:req.user.id,status:"active"},{$set:{status:"closed",closedAt:new Date()}},{new:true});if(!c)return res.status(404).json({error:"Active temporary consultation not found"});await audit(req,"temporary_consult.closed","TemporaryConsult",c.id);res.json({message:"Temporary link closed."});}));
+const consultTokenHash=token=>crypto.createHash("sha256").update(String(token)).digest("hex");
+function temporaryIceServers(){
+  const urls=String(process.env.TURN_URLS||"").split(",").map(x=>x.trim()).filter(Boolean);
+  const iceServers=[{urls:"stun:stun.l.google.com:19302"}];
+  const secret=process.env.TURN_SHARED_SECRET;
+  if(urls.length&&secret){const expiry=Math.floor(Date.now()/1000)+3600;const username=`${expiry}:${crypto.randomBytes(8).toString("hex")}`;const credential=crypto.createHmac("sha1",secret).update(username).digest("base64");iceServers.push({urls,username,credential});}
+  return iceServers;
+}
+async function activeConsult(token){return TemporaryConsult.findOne({tokenHash:consultTokenHash(token),status:"active",expiresAt:{$gt:new Date()}}).populate("doctorId","name doctorProfile.specialty");}
+async function guestConsultAuth(req,res,next){try{const raw=req.headers.authorization?.startsWith("Bearer ")?req.headers.authorization.slice(7):"";const payload=jwt.verify(raw,config.jwtSecret);if(payload.role!=="guest"||!payload.consultId)return res.status(401).json({error:"Guest room session required"});const active=await TemporaryConsult.exists({_id:payload.consultId,status:"active",expiresAt:{$gt:new Date()}});if(!active)return res.status(410).json({error:"Consultation room closed or expired"});req.consultActor={role:"guest",name:String(payload.name||"Guest patient").slice(0,120),consultId:String(payload.consultId)};next();}catch(e){if(e.name==="JsonWebTokenError"||e.name==="TokenExpiredError")return res.status(401).json({error:"Guest room session expired. Reopen the original link."});next(e);}}
+router.get("/temporary-consults/:token",mkLimiter(5,30,"Too many link attempts"),wrap(async(req,res)=>{const c=await activeConsult(req.params.token);if(!c)return res.status(410).json({error:"This consultation link has expired or was closed."});res.set("Cache-Control","no-store");res.json({consultation:{id:String(c._id),patientName:c.patientName,doctor:c.doctorId,expiresAt:c.expiresAt}});}));
+router.post("/temporary-consults/:token/join",mkLimiter(5,20,"Too many join attempts"),wrap(async(req,res)=>{const c=await activeConsult(req.params.token);if(!c)return res.status(410).json({error:"This consultation link has expired or was closed."});const name=String(req.body.name||c.patientName||"Guest patient").trim().slice(0,120);if(name.length<2)return res.status(400).json({error:"Enter your name"});const remaining=Math.max(60,Math.floor((c.expiresAt-Date.now())/1000));const session=jwt.sign({role:"guest",consultId:String(c.id),name},config.jwtSecret,{expiresIn:Math.min(remaining,14400)});res.set("Cache-Control","no-store");res.json({token:session,role:"guest",name,expiresAt:c.expiresAt,iceServers:temporaryIceServers()});}));
+router.post("/temporary-consults/:id/doctor-session",auth,wrap(async(req,res)=>{const c=await TemporaryConsult.findOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}});if(!c)return res.status(410).json({error:"Consultation room closed or expired"});if(String(c.doctorId)!==String(req.user.id)&&String(c.createdBy)!==String(req.user.id))return res.status(403).json({error:"Only the assigned doctor or issuing administrator can join"});res.json({room:{id:c.id,patientName:c.patientName,doctorId:c.doctorId,expiresAt:c.expiresAt},iceServers:temporaryIceServers()});}));
+router.get("/temporary-consults/:id/room/messages",guestConsultAuth,wrap(async(req,res)=>{if(String(req.params.id)!==req.consultActor.consultId)return res.status(403).json({error:"Room mismatch"});const c=await TemporaryConsult.findById(req.params.id).select("messages");res.json({messages:(c?.messages||[]).slice(-200)});}));
+router.post("/temporary-consults/:id/room/messages",guestConsultAuth,wrap(async(req,res)=>{if(String(req.params.id)!==req.consultActor.consultId)return res.status(403).json({error:"Room mismatch"});const body=String(req.body.body||"").trim();if(!body||body.length>3000)return res.status(400).json({error:"Message must be 1-3000 characters"});const message={senderRole:"guest",senderName:req.consultActor.name,body,createdAt:new Date()};await TemporaryConsult.updateOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}},{$push:{messages:{$each:[message],$slice:-500}}});res.status(201).json({message});}));
+router.get("/temporary-consults/:id/room/doctor-messages",auth,wrap(async(req,res)=>{const c=await TemporaryConsult.findOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}});if(!c)return res.status(410).json({error:"Consultation room closed or expired"});if(String(c.doctorId)!==String(req.user.id)&&String(c.createdBy)!==String(req.user.id))return res.status(403).json({error:"Not assigned to this room"});res.json({messages:(c.messages||[]).slice(-200)});}));
+router.post("/temporary-consults/:id/room/doctor-messages",auth,wrap(async(req,res)=>{const c=await TemporaryConsult.findOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}});if(!c)return res.status(410).json({error:"Consultation room closed or expired"});if(String(c.doctorId)!==String(req.user.id)&&String(c.createdBy)!==String(req.user.id))return res.status(403).json({error:"Not assigned to this room"});const body=String(req.body.body||"").trim();if(!body||body.length>3000)return res.status(400).json({error:"Message must be 1-3000 characters"});const message={senderRole:req.user.role,senderName:req.user.name,body,createdAt:new Date()};await TemporaryConsult.updateOne({_id:c.id},{$push:{messages:{$each:[message],$slice:-500}}});res.status(201).json({message});}));
+router.get("/temporary-consults/:id/room/signals",guestConsultAuth,wrap(async(req,res)=>{if(String(req.params.id)!==req.consultActor.consultId)return res.status(403).json({error:"Room mismatch"});const after=new Date(String(req.query.after||Date.now()-60000));const signals=await TemporaryCallSignal.find({consultId:req.params.id,createdAt:{$gt:Number.isNaN(after.getTime())?new Date(Date.now()-60000):after},senderRole:{$ne:"guest"}}).sort({createdAt:1}).limit(80).select("type payload senderRole senderName createdAt");res.json({signals});}));
+router.post("/temporary-consults/:id/room/signals",guestConsultAuth,wrap(async(req,res)=>{if(String(req.params.id)!==req.consultActor.consultId)return res.status(403).json({error:"Room mismatch"});const type=String(req.body.type||"");if(!["offer","answer","ice","hangup"].includes(type))return res.status(400).json({error:"Invalid call signal"});const payload=req.body.payload;if(type!=="hangup"&&(payload==null||JSON.stringify(payload).length>100000))return res.status(400).json({error:"Invalid call payload"});await TemporaryCallSignal.create({consultId:req.params.id,senderRole:"guest",senderName:req.consultActor.name,type,payload:type==="hangup"?{}:payload});res.status(201).json({ok:true});}));
+router.get("/temporary-consults/:id/room/doctor-signals",auth,wrap(async(req,res)=>{const c=await TemporaryConsult.findOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}});if(!c)return res.status(410).json({error:"Consultation room closed or expired"});if(String(c.doctorId)!==String(req.user.id)&&String(c.createdBy)!==String(req.user.id))return res.status(403).json({error:"Not assigned to this room"});const after=new Date(String(req.query.after||Date.now()-60000));const signals=await TemporaryCallSignal.find({consultId:req.params.id,createdAt:{$gt:Number.isNaN(after.getTime())?new Date(Date.now()-60000):after},senderRole:"guest"}).sort({createdAt:1}).limit(80).select("type payload senderRole senderName createdAt");res.json({signals});}));
+router.post("/temporary-consults/:id/room/doctor-signals",auth,wrap(async(req,res)=>{const c=await TemporaryConsult.findOne({_id:req.params.id,status:"active",expiresAt:{$gt:new Date()}});if(!c)return res.status(410).json({error:"Consultation room closed or expired"});if(String(c.doctorId)!==String(req.user.id)&&String(c.createdBy)!==String(req.user.id))return res.status(403).json({error:"Not assigned to this room"});const type=String(req.body.type||"");if(!["offer","answer","ice","hangup"].includes(type))return res.status(400).json({error:"Invalid call signal"});const payload=req.body.payload;if(type!=="hangup"&&(payload==null||JSON.stringify(payload).length>100000))return res.status(400).json({error:"Invalid call payload"});await TemporaryCallSignal.create({consultId:req.params.id,senderRole:req.user.role,senderName:req.user.name,type,payload:type==="hangup"?{}:payload});res.status(201).json({ok:true});}));
+
+
+// WebRTC ICE configuration. TURN secrets are delivered only to authenticated call participants.
+router.get("/webrtc/ice-servers",auth,wrap(async(req,res)=>{
+  const urls=String(process.env.TURN_URLS||"").split(",").map(x=>x.trim()).filter(Boolean);
+  const iceServers=[{urls:"stun:stun.l.google.com:19302"}];
+  if(urls.length && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL){
+    iceServers.push({urls,username:process.env.TURN_USERNAME,credential:process.env.TURN_CREDENTIAL});
+  }
+  res.set("Cache-Control","no-store");res.json({iceServers,turnEnabled:iceServers.length>1});
+}));
+
 router.get("/notifications/mine",auth,wrap(async(req,res)=>{const notifications=await Notification.find({userId:req.user.id}).sort({createdAt:-1}).limit(100);res.json({notifications});}));
 router.post("/notifications/:id/read",auth,wrap(async(req,res)=>{const n=await Notification.findOneAndUpdate({_id:req.params.id,userId:req.user.id},{$set:{readAt:new Date()}},{new:true});if(!n)return res.status(404).json({error:"Notification not found"});res.json({notification:n});}));
 

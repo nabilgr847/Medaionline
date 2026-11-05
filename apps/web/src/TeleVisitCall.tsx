@@ -5,6 +5,7 @@ import { Api, json, postForm, downloadFile, fmtDay, fmtSize } from "./api";
 /** Peer-to-peer browser call. Audio recording is disabled until both appointment participants consent. */
 export default function TeleVisitCall({ api, token, appointmentId, user, setMessage }: { api: Api; token: string; appointmentId: string; user: any; setMessage: (s: string) => void }) {
   const localVideo = useRef<HTMLVideoElement>(null); const remoteVideo = useRef<HTMLVideoElement>(null);
+  const iceConfig = useRef<RTCIceServer[]>([{ urls: "stun:stun.l.google.com:19302" }]);
   const pc = useRef<RTCPeerConnection | null>(null); const local = useRef<MediaStream | null>(null); const remote = useRef<MediaStream | null>(null);
   const seen = useRef<Set<string>>(new Set()); const after = useRef(new Date(Date.now() - 60000).toISOString()); const queuedIce = useRef<RTCIceCandidateInit[]>([]);
   const recorder = useRef<MediaRecorder | null>(null); const audioContext = useRef<AudioContext | null>(null); const chunks = useRef<Blob[]>([]); const speechRecognition = useRef<any>(null);
@@ -23,7 +24,7 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
     if (s.type === "offer") {
       if (!local.current) return;
       adminPeers.current[id]?.close();
-      const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }); adminPeers.current[id] = peer;
+      const peer = new RTCPeerConnection({ iceServers: iceConfig.current }); adminPeers.current[id] = peer;
       local.current.getTracks().forEach((tr) => peer.addTrack(tr, local.current!));
       peer.onicecandidate = (e) => { if (e.candidate) signal("ice", e.candidate.toJSON(), id).catch(() => {}); };
       await peer.setRemoteDescription(new RTCSessionDescription(s.payload));
@@ -34,9 +35,10 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
       if (peer?.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(s.payload)).catch(() => {}); else (adminIce.current[id] = adminIce.current[id] || []).push(s.payload);
     }
   }
+  useEffect(() => { api("/webrtc/ice-servers").then((d:any)=>{ if(Array.isArray(d.iceServers)&&d.iceServers.length) iceConfig.current=d.iceServers; }).catch(()=>{}); }, []);
   function ensurePeer() {
     if (pc.current) return pc.current;
-    const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    const peer = new RTCPeerConnection({ iceServers: iceConfig.current });
     peer.onicecandidate = (e) => { if (e.candidate) signal("ice", e.candidate.toJSON()).catch(() => {}); };
     peer.ontrack = (e) => { remote.current = e.streams[0]; if (remoteVideo.current) { remoteVideo.current.srcObject = e.streams[0]; remoteVideo.current.play().catch(() => {}); } };
     peer.onconnectionstatechange = () => { const state = peer.connectionState; const ok = state === "connected"; setConnected(ok); const connectionState = ["connected", "disconnected", "failed"].includes(state) ? state : "starting"; api(`/appointments/${appointmentId}/call-heartbeat`, { method: "POST", body: json({ active: true, connectionState }) }).catch(() => {}); };

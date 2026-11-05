@@ -1,6 +1,6 @@
 # MedAI Hospital — verification report
 
-Date: 2026-11-04
+Date: 2026-11-06 (V3.6.4 release-candidate update)
 
 ## Verified in this environment
 
@@ -9,6 +9,15 @@ Date: 2026-11-04
 - Focused Node tests: 9/9 passed (`util.test.js`, `report-rules.test.js`, `file-storage.test.js`, `medicine-template.test.js`).
 - JSON medicine import example: parsed successfully and contains the documented `medicines` array structure.
 - No `.env` or populated credential file is included in the release archive.
+
+## Additional V3.6.4 guest-room changes
+
+- Added expiring guest JWT sessions bound to a single temporary consultation and checked against active room status on every guest API request.
+- Added bounded text chat, assigned-doctor/Admin access, WebRTC signaling, and a guest-room frontend route.
+- Added short-lived TURN REST credentials when `TURN_URLS` and `TURN_SHARED_SECRET` are configured.
+- Added `CHANGELOG_V3_6_4_GUEST_ROOM.md` and `docs/V3_6_4_RELEASE_VALIDATION.md`.
+
+These new flows have only passed JavaScript syntax checks; they have not passed a browser/MongoDB end-to-end test.
 
 ## Changes included in this update
 
@@ -40,4 +49,4 @@ Date: 2026-11-04
 
 ## Release status
 
-Development/staging package only. Do not use with real patient data or deploy as a production clinical service until dependencies install, frontend build passes, Atlas integration and all required workflows pass staging end-to-end tests, and clinical/security/privacy reviews are completed.
+V3.6.4 release candidate / development-staging package only. Do not use with real patient data or deploy as a production clinical service until dependencies install, frontend build passes, Atlas integration and all required workflows pass staging end-to-end tests, and clinical/security/privacy reviews are completed.
