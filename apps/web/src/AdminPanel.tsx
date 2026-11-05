@@ -1,14 +1,16 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useState } from "react";
+import { AdminConversations } from "./extras";
 import { Api, json, downloadFile, fmtDate, fmtDay, label, parseCsv } from "./api";
 import { useBadges, Tabs, ChangePassword } from "./common";
 
-export default function AdminPanel({ api, token, onToken, setMessage }: { api: Api; token: string; onToken: (t: string) => void; setMessage: (s: string) => void }) {
+export default function AdminPanel({ api, user, token, onToken, setMessage }: { api: Api; user: any; token: string; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("doctors");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["banner", "Banner"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["convos", "Messages & calls"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["banner", "Banner"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
+    {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
     {tab === "reports" && <ReportsPanel api={api} token={token} setMessage={setMessage} />}
     {tab === "resets" && <RequestsPanel api={api} setMessage={setMessage} />}
     {tab === "users" && <Users api={api} setMessage={setMessage} />}

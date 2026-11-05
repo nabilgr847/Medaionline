@@ -5,12 +5,14 @@ import ChatAI, { FindingsList, ReportView } from "./ChatAI";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
+import { DoctorPicker } from "./extras";
 
 const CANCELLABLE = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "follow_up_required"];
 
 export default function PatientPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "patient");
+  useEffect(() => { const f = () => setTab("appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
     <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
@@ -29,6 +31,7 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
   const [list, setList] = useState<any[]>([]); const [doctors, setDoctors] = useState<any[]>([]);
   const [slot, setSlot] = useState(""); const [problem, setProblem] = useState(""); const [doctorId, setDoctorId] = useState(""); const [type, setType] = useState("online"); const [openChat, setOpenChat] = useState(""); const [openCall, setOpenCall] = useState("");
   async function load() { try { const d = await api("/appointments"); setList(d.appointments || []); } catch (e: any) { setMessage(e.message); } }
+  useEffect(() => { const f = () => { const d = (window as any).__medaiOpen; if (!d) return; if (d.kind === "call") { setOpenCall(d.appointmentId); setOpenChat(""); } else { setOpenChat(d.appointmentId); } load(); (window as any).__medaiOpen = null; }; f(); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   useEffect(() => { load(); api("/doctors").then((d) => setDoctors(d.doctors || [])).catch(() => {}); }, []);
   async function book(e: any) {
     e.preventDefault();
@@ -39,8 +42,8 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
   return <div className="grid">
     <article><h3>Request an appointment</h3><form onSubmit={book}>
       <textarea placeholder="Describe the reason for your appointment" value={problem} onChange={(e) => setProblem(e.target.value)} required minLength={5} />
-      <label>Doctor (optional)<select value={doctorId} onChange={(e) => { setDoctorId(e.target.value); setSlot(""); }}><option value="">Any available doctor</option>{doctors.map((d) => <option key={d._id} value={d._id}>{d.name}{d.doctorProfile?.specialty ? " — " + d.doctorProfile.specialty : ""}</option>)}</select></label>
-      {doctorId && doctors.find((d) => d._id === doctorId)?.doctorProfile?.bio && <p className="notice">{doctors.find((d) => d._id === doctorId)?.doctorProfile?.bio}</p>}
+      <label>Choose a doctor (optional)</label>
+      <DoctorPicker token={token} doctors={doctors} value={doctorId} onChange={(id) => { setDoctorId(id); setSlot(""); }} />
       {doctorId && <SlotPicker api={api} doctorId={doctorId} value={slot} onChange={setSlot} />}
       <label>Consultation type<select value={type} onChange={(e) => setType(e.target.value)}><option value="online">Online</option><option value="in_person">In person</option></select></label>
       <button className="primary">📨 Send request</button></form>

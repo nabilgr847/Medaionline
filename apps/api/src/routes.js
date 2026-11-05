@@ -180,6 +180,9 @@ router.post("/doctor/apply",applyLimiter,upload.array("documents",5),validateUpl
     const s=z.object({name:z.string().min(2).max(120),email:z.string().email(),phone:z.string().min(5).max(30),password:z.string().min(14).max(128),bmdcNumber:z.string().min(3).max(40),specialty:z.string().min(2).max(100),qualifications:z.string().min(2).max(500),experienceYears:z.coerce.number().min(0).max(70)}).safeParse(req.body);
     if(!s.success){await removeFiles(files);return res.status(400).json({error:"Invalid doctor application. Check every field (password needs 14+ characters).",details:s.error.flatten()});}
     if(!files.some((f,i)=>String(req.body[`category_${i}`]||"")==="bmdc_certificate")){await removeFiles(files);return res.status(400).json({error:"Upload your BMDC registration certificate."});}
+    const pi=files.findIndex((f,i)=>String(req.body[`category_${i}`]||"")==="doctor_photo");
+    if(pi<0){await removeFiles(files);return res.status(400).json({error:"Upload your profile photo. Patients see it when choosing a doctor."});}
+    if(!["image/jpeg","image/png","image/webp"].includes(files[pi].mimetype)||files[pi].size>3*1024*1024){await removeFiles(files);return res.status(400).json({error:"Profile photo must be a JPG, PNG or WEBP image up to 3 MB."});}
     if(await User.findOne({email:s.data.email.toLowerCase()})){await removeFiles(files);return res.status(409).json({error:"Email already registered"});}
     const user=await User.create({name:s.data.name,email:s.data.email.toLowerCase(),phone:s.data.phone,passwordHash:await hashPassword(s.data.password),role:"doctor",status:"pending_verification",doctorProfile:{bmdcNumber:s.data.bmdcNumber,specialty:s.data.specialty,qualifications:s.data.qualifications.split(",").map(x=>x.trim()).filter(Boolean),experienceYears:s.data.experienceYears}});
     await saveDoctorDocs(user.id,files,req.body);
@@ -234,6 +237,13 @@ router.get("/admin/monitoring",auth,allow("admin"),wrap(async(req,res)=>{
     User.aggregate([{$match:{role:{$in:["patient","doctor"]},status:"active",lastSeenAt:{$gte:onlineSince}}},{$group:{_id:"$role",count:{$sum:1}}}])
   ]);
   res.json({asOf:now,onlineUsers,activeCalls,recentActivity,onlineCounts,thresholdSeconds:75,callStaleSeconds:90});
+}));
+
+router.get("/admin/appointments",auth,allow("admin"),wrap(async(req,res)=>{
+  const appts=await Appointment.find({doctorId:{$ne:null}}).sort({updatedAt:-1}).limit(150).populate("patientId","name email").populate("doctorId","name email").select("patientId doctorId status scheduledAt consultationType problem updatedAt").lean();
+  const live=await CallSession.find({status:"active",lastHeartbeatAt:{$gte:new Date(Date.now()-90000)}}).select("appointmentId").lean();
+  const liveSet=new Set(live.map(x=>String(x.appointmentId)));
+  res.json({appointments:appts.map(a=>({...a,liveCall:liveSet.has(String(a._id))}))});
 }));
 
 router.get("/admin/overview",auth,allow("admin"),wrap(async(req,res)=>{
@@ -395,16 +405,28 @@ router.get("/appointments/:id/patient-record",auth,allow("doctor"),wrap(async(re
 
 router.get("/appointments/:id/messages",auth,wrap(async(req,res)=>{
   const appt=await Appointment.findById(req.params.id); if(!appt) return res.status(404).json({error:"Appointment not found"});
-  const allowed=String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id);
+  const allowed=String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id)||req.user.role==="admin";
   if(!allowed) return res.status(403).json({error:"Only participants can access this conversation"});
+  if(req.user.role==="admin") await audit(req,"admin.conversation_view","Appointment",appt.id);
   res.json({messages:await Message.find({appointmentId:appt.id}).populate("senderId","name role").sort({createdAt:1})});
 }));
 router.post("/appointments/:id/messages",auth,wrap(async(req,res)=>{
   const appt=await Appointment.findById(req.params.id); if(!appt) return res.status(404).json({error:"Appointment not found"});
-  const allowed=String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id);
+  const isAdmin=req.user.role==="admin";
+  const allowed=String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id)||isAdmin;
   if(!allowed || !appt.doctorId) return res.status(403).json({error:"Conversation is not available"});
   const body=String(req.body.body||"").trim(); if(!body||body.length>5000) return res.status(400).json({error:"Message must be 1-5000 characters"});
   const message=await Message.create({appointmentId:appt.id,senderId:req.user.id,body});
+  // Tell the other person. While they have not read it, several messages from one chat become ONE notification ("3 new messages").
+  try{
+    const targets=isAdmin?[appt.patientId,appt.doctorId]:[String(appt.patientId)===String(req.user.id)?appt.doctorId:appt.patientId];
+    for(const toId of targets){
+      const who=isAdmin?"Admin":req.user.role==="doctor"?"Dr. "+req.user.name:req.user.name;
+      const prev=await Notification.findOne({userId:toId,type:"new_message",resourceId:String(appt.id),readAt:null});
+      if(prev){const c=(prev.count||1)+1;prev.count=c;prev.title=`${c} new messages from ${who}`;prev.message=body.slice(0,140);prev.createdAt=new Date();await prev.save();}
+      else await Notification.create({userId:toId,type:"new_message",title:`New message from ${who}`,message:body.slice(0,140),resourceType:"Appointment",resourceId:String(appt.id),count:1});
+    }
+  }catch(e){console.error("message notify failed",e.message);}
   res.status(201).json({message});
 }));
 
@@ -460,7 +482,7 @@ router.post("/ai/report-analysis",auth,allow("patient"),aiLimiter,wrap(async(req
 // WebRTC signaling and consent-controlled consultation recording. Signals expire after 24 hours.
 async function getCallParticipant(id,user){
   const appt=await Appointment.findById(id); if(!appt) return {error:"Appointment not found"};
-  if(String(appt.patientId)!==String(user.id)&&String(appt.doctorId)!==String(user.id)) return {error:"Only the appointment participants can access calls"};
+  if(user.role!=="admin"&&String(appt.patientId)!==String(user.id)&&String(appt.doctorId)!==String(user.id)) return {error:"Only the appointment participants can access calls"};
   if(!appt.doctorId) return {error:"A doctor must be assigned before starting a call"};
   if(appt.consultationType!=="online") return {error:"Audio/video calls are only available for online appointments"};
   if(CLOSED_STATUSES.includes(appt.status)) return {error:"This appointment is closed"};
@@ -490,14 +512,45 @@ router.post("/appointments/:id/recording-consent",auth,wrap(async(req,res)=>{
 router.get("/appointments/:id/call-signals",auth,wrap(async(req,res)=>{
   const r=await getCallParticipant(req.params.id,req.user); if(r.error) return res.status(403).json({error:r.error});
   const after=req.query.after?new Date(String(req.query.after)):new Date(Date.now()-60000);
-  const signals=await CallSignal.find({appointmentId:r.appt.id,createdAt:{$gt:Number.isNaN(after.getTime())?new Date(Date.now()-60000):after},senderId:{$ne:req.user.id}}).sort({createdAt:1}).limit(100).select("type payload senderId createdAt");
+  const toMe=req.user.role==="admin"?{to:req.user.id}:{$or:[{to:null},{to:req.user.id}]};
+  const signals=await CallSignal.find({appointmentId:r.appt.id,createdAt:{$gt:Number.isNaN(after.getTime())?new Date(Date.now()-60000):after},senderId:{$ne:req.user.id},...toMe}).sort({createdAt:1}).limit(100).select("type payload senderId senderRole createdAt");
   res.json({signals});
 }));
 router.post("/appointments/:id/call-signals",auth,wrap(async(req,res)=>{
   const r=await getCallParticipant(req.params.id,req.user); if(r.error) return res.status(403).json({error:r.error});
   const type=String(req.body.type||""); if(!["offer","answer","ice","hangup"].includes(type)) return res.status(400).json({error:"Invalid call signal"});
   const payload=req.body.payload; if(type!=="hangup"&&(payload==null||JSON.stringify(payload).length>100000)) return res.status(400).json({error:"Call signal payload is missing or too large"});
-  const signal=await CallSignal.create({appointmentId:r.appt.id,senderId:req.user.id,type,payload:type==="hangup"?{}:payload});
+  const isAdmin=req.user.role==="admin"; let to=null;
+  if(req.body.to&&/^[a-f0-9]{24}$/i.test(String(req.body.to))){
+    const tu=await User.findById(String(req.body.to)).select("role");
+    if(tu&&(isAdmin?[String(r.appt.patientId),String(r.appt.doctorId)].includes(String(tu.id)):tu.role==="admin")) to=tu.id;
+  }
+  if(isAdmin&&!to) return res.status(400).json({error:"Admin call signals need a target"});
+  const signal=await CallSignal.create({appointmentId:r.appt.id,senderId:req.user.id,senderRole:req.user.role,to,type,payload:type==="hangup"?{}:payload});
+  if(isAdmin&&type==="offer") await audit(req,"admin.call_observe","Appointment",r.appt.id);
+  if(isAdmin||to) return res.status(201).json({ok:true});
+  try{
+    const otherId=String(r.appt.patientId)===String(req.user.id)?r.appt.doctorId:r.appt.patientId;
+    const who=req.user.role==="doctor"?"Dr. "+req.user.name:req.user.name;
+    if(type==="offer"&&otherId){
+      const isVideo=/m=video/.test(String(payload?.sdp||""));
+      await Notification.updateMany({userId:otherId,type:{$in:["incoming_call","missed_call"]},resourceId:String(r.appt.id),readAt:null},{$set:{readAt:new Date()}});
+      await Notification.create({userId:otherId,type:"incoming_call",title:isVideo?"Incoming video call":"Incoming audio call",message:`${who} is calling you. Open Appointments and press Join call.`,resourceType:"Appointment",resourceId:String(r.appt.id),count:1});
+    }
+    if(type==="hangup"&&otherId){
+      // Caller hung up before the other person ever answered => missed call.
+      const lastOffer=await CallSignal.findOne({appointmentId:r.appt.id,type:"offer",senderId:req.user.id}).sort({createdAt:-1});
+      if(lastOffer){
+        const answered=await CallSignal.exists({appointmentId:r.appt.id,type:"answer",senderId:otherId,createdAt:{$gt:lastOffer.createdAt}});
+        const inc=await Notification.findOne({userId:otherId,type:"incoming_call",resourceId:String(r.appt.id),readAt:null});
+        if(!answered&&inc){
+          const wasVideo=/video/i.test(inc.title);
+          await Notification.updateMany({userId:otherId,type:"incoming_call",resourceId:String(r.appt.id),readAt:null},{$set:{readAt:new Date()}});
+          await notify(otherId,"missed_call",wasVideo?"Missed video call":"Missed audio call",`You missed a call from ${who}.`,"Appointment",r.appt.id);
+        }
+      }
+    }
+  }catch(e){console.error("call notify failed",e.message);}
   if(type==="offer") await CallSession.findOneAndUpdate({appointmentId:r.appt.id,status:"active"},{$set:{patientId:r.appt.patientId,doctorId:r.appt.doctorId,lastHeartbeatAt:new Date(),lastConnectionState:"starting"},$setOnInsert:{startedAt:new Date()}},{upsert:true,new:true});
   if(type==="hangup") await CallSession.updateMany({appointmentId:r.appt.id,status:"active"},{$set:{status:"ended",endedAt:new Date(),lastHeartbeatAt:new Date(),lastConnectionState:"ended"}});
   await User.updateOne({_id:req.user.id},{$set:{lastSeenAt:new Date()}});
@@ -528,8 +581,16 @@ router.post("/appointments/:id/recording-analysis",auth,aiLimiter,wrap(async(req
 }));
 
 router.get("/doctors",wrap(async(_req,res)=>{
-  const doctors=await User.find({role:"doctor",status:"active"}).select("name doctorProfile.specialty doctorProfile.qualifications doctorProfile.experienceYears doctorProfile.bio");
-  res.json({doctors});
+  const doctors=await User.find({role:"doctor",status:"active"}).select("name doctorProfile.specialty doctorProfile.qualifications doctorProfile.experienceYears doctorProfile.bio doctorProfile.clinicName doctorProfile.verifiedAt").lean();
+  const photos=await PrivateFile.find({category:"doctor_photo",ownerId:{$in:doctors.map(d=>d._id)}}).select("ownerId").lean();
+  const has=new Set(photos.map(p=>String(p.ownerId)));
+  res.json({doctors:doctors.map(d=>({...d,hasPhoto:has.has(String(d._id))}))});
+}));
+router.get("/doctors/:id/photo",auth,wrap(async(req,res)=>{
+  const u=await User.findOne({_id:req.params.id,role:"doctor",status:"active"}).select("_id"); if(!u) return res.status(404).json({error:"Not found"});
+  const file=await PrivateFile.findOne({ownerId:u._id,category:"doctor_photo"}).sort({createdAt:-1}); if(!file||!/^image\//.test(file.mimeType)) return res.status(404).json({error:"No photo"});
+  res.setHeader("Cache-Control","private, max-age=300"); res.type(file.mimeType);
+  const p=await resolveStoredFilePath(uploadDir,file); res.sendFile(p,()=>{if(file.storageProvider==="gridfs") fs.unlink(p).catch(()=>{});});
 }));
 
 router.get("/medicines",auth,allow("patient","doctor","admin"),wrap(async(req,res)=>{
@@ -644,7 +705,7 @@ async function verifyOtp(user,purpose,code){
 }
 function clearOtp(user){user.otpHash=undefined;user.otpExpires=undefined;user.otpAttempts=undefined;user.otpSentAt=undefined;user.otpPurpose=undefined;}
 // Email copy of in-app notifications (to the user's own address).
-const EMAIL_TYPES=new Set(["appointment_requested","appointment_status_changed","appointment_cancelled","appointment_time_proposed","appointment_time_declined","appointment_time_accepted","prescription_issued","report_review_requested","report_approved","report_changes_requested","report_rejected","report_assigned"]);
+const EMAIL_TYPES=new Set(["missed_call","appointment_requested","appointment_status_changed","appointment_cancelled","appointment_time_proposed","appointment_time_declined","appointment_time_accepted","prescription_issued","report_review_requested","report_approved","report_changes_requested","report_rejected","report_assigned"]);
 async function emailNotification(userId,title,message){
   if(!mailer()) return;
   const u=await User.findById(userId).select("name email contactEmail status role"); if(!u||u.status!=="active"||u.role==="admin") return;

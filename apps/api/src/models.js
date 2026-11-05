@@ -92,6 +92,7 @@ export const Prescription = model("Prescription",prescriptionSchema);
 const callSignalSchema = new Schema({
   appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",required:true,index:true},
   senderId:{type:Schema.Types.ObjectId,ref:"User",required:true},
+  senderRole:{type:String,default:""}, to:{type:Schema.Types.ObjectId,ref:"User",default:null},
   type:{type:String,enum:["offer","answer","ice","hangup"],required:true},
   payload:{type:Schema.Types.Mixed}
 },{timestamps:true});
@@ -107,7 +108,7 @@ const medicalReportSchema = new Schema({
   reviewComment:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date
 },{timestamps:true});
 medicalReportSchema.index({doctorId:1,status:1,createdAt:-1});
-const notificationSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},type:{type:String,required:true},title:{type:String,required:true},message:{type:String,required:true},resourceType:String,resourceId:String,readAt:Date},{timestamps:true});
+const notificationSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},type:{type:String,required:true},title:{type:String,required:true},message:{type:String,required:true},resourceType:String,resourceId:String,count:{type:Number,default:1},readAt:Date},{timestamps:true});
 notificationSchema.index({userId:1,createdAt:-1});
 export const MedicalReport = model("MedicalReport", medicalReportSchema);
 export const Notification = model("Notification", notificationSchema);

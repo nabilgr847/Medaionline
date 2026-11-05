@@ -5,6 +5,7 @@ import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
 import DoctorApply from "./DoctorApply";
+import { AlertCenter } from "./extras";
 import { BannerSlider, BannerContext } from "./common";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
@@ -99,12 +100,13 @@ function MainApp() {
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
 
+    {user && user.role !== "admin" && <AlertCenter api={api} />}
     {user && <section className="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
       {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
       {user.role === "patient" && <PatientPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "doctor" && <DoctorPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
-      {user.role === "admin" && <AdminPanel api={api} token={token} onToken={setToken} setMessage={setMessage} />}
+      {user.role === "admin" && <AdminPanel api={api} user={user} token={token} onToken={setToken} setMessage={setMessage} />}
     </section>}
 
     <section id="services"><p className="eyebrow">CARE, CONNECTED</p><h2>Tools to support your health journey</h2><div className="grid three"><article><div className="service-icon" aria-hidden="true">▤</div><h3>Medical report hub</h3><p>Organize private reports and share them only through authorized care workflows.</p></article><article><div className="service-icon" aria-hidden="true">✚</div><h3>Doctor consultation</h3><p>Appointment requests, clinician messaging and doctor-written prescriptions.</p></article><article><div className="service-icon" aria-hidden="true">♡</div><h3>Medicine information</h3><p>Structured medicine information for review. MedAI does not independently prescribe treatment.</p></article></div></section>

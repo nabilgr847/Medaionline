@@ -25,7 +25,7 @@ export function useBadges(api: Api, role: "patient" | "doctor" | "admin"): Recor
       } catch { /* badges are best-effort */ }
       if (live) setB(next);
     }
-    load(); const t = setInterval(load, 30000); const f = () => { if (!document.hidden) load(); };
+    load(); const t = setInterval(load, 10000); const f = () => { if (!document.hidden) load(); };
     document.addEventListener("visibilitychange", f); window.addEventListener("medai-badges", f);
     return () => { live = false; clearInterval(t); document.removeEventListener("visibilitychange", f); window.removeEventListener("medai-badges", f); };
   }, [role]);
@@ -109,14 +109,14 @@ export function ChangePassword({ api, onToken, setMessage }: { api: Api; onToken
     <button className="primary">Update password</button></form></article>;
 }
 
-const NOTE_ICON: Record<string, string> = { prescription: "💊", report: "📄", appointment: "📅", account: "👤", call: "📞" };
+const NOTE_ICON: Record<string, string> = { missed: "📵", message: "💬", prescription: "💊", report: "📄", appointment: "📅", account: "👤", call: "📞", message: "💬", missed: "📵" };
 const noteIcon = (t: string) => { const k = Object.keys(NOTE_ICON).find((x) => (t || "").includes(x)); return k ? NOTE_ICON[k] : "🔔"; };
 
 // One notification list for patient and doctor. Unread items get a red dot and a tinted card; read items are plain.
 export function Notifications({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
   const [items, setItems] = useState<any[]>([]);
   async function load() { try { const d = await api("/notifications/mine"); setItems(d.notifications || []); } catch (e: any) { setMessage(e.message); } }
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
   async function read(id: string) { try { await api(`/notifications/${id}/read`, { method: "POST", body: json({}) }); setItems((l) => l.map((n) => (n._id === id ? { ...n, readAt: new Date().toISOString() } : n))); window.dispatchEvent(new Event("medai-badges")); } catch (e: any) { setMessage(e.message); } }
   async function readAll() { await Promise.all(items.filter((n) => !n.readAt).map((n) => api(`/notifications/${n._id}/read`, { method: "POST", body: json({}) }).catch(() => {}))); load(); window.dispatchEvent(new Event("medai-badges")); }
   const unread = items.filter((n) => !n.readAt).length;

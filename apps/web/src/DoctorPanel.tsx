@@ -14,6 +14,7 @@ const emptyItem = () => ({ brand: "", generic: "", strength: "", form: "Tablet",
 export default function DoctorPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "doctor");
+  useEffect(() => { const f = () => setTab("appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
     <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
@@ -30,7 +31,7 @@ function Requests({ api, setMessage }: { api: Api; setMessage: (s: string) => vo
   async function load() { try { const d = await api("/doctor/unassigned-appointment-requests"); setList(d.requests || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
   async function claim(id: string) { try { await api(`/appointments/${id}/claim`, { method: "POST", body: json({}) }); setMessage("Request assigned to you. Open Appointments to schedule it."); load(); } catch (e: any) { setMessage(e.message); load(); } }
-  return <div className="grid"><article className="full"><h3>New patient requests</h3><p className="muted">Patients who asked for an appointment but have not been given a doctor yet appear here. Press <b>Accept request</b> to take the patient. It then moves to your <b>Appointments</b> tab, where you set the visit time. The first doctor to accept gets the patient.</p><button className="outline" onClick={load}>↻ Refresh</button>
+  return <div className="grid"><article className="full"><h3>New patient requests</h3><div className="muted"><p><b>What is this page?</b> These are patients who asked for an appointment but did not choose a doctor. Any doctor can take them.</p><ol><li>Read the patient's problem below.</li><li>Press <b>Accept this patient</b>. The first doctor to press it gets the patient (others will see "already assigned").</li><li>The patient moves to your <b>Appointments</b> tab. There, suggest a visit time, then start the chat or call.</li></ol><p>If you do not want the patient, simply do nothing. Nothing is sent to the patient until you accept.</p></div><button className="outline" onClick={load}>↻ Refresh</button>
     {list.length === 0 && <p className="muted">No new requests right now. New ones will show a red number on this tab.</p>}
     {list.map((a) => <div className="item" key={a._id}><b>{a.patientId?.name || "Patient"}</b> · {fmtDate(a.createdAt)} · {label(a.consultationType)}{a.preferredAt && <> · 🕒 wants {fmtDate(a.preferredAt)}</>}<p>{a.problem}</p><button className="primary" onClick={() => claim(a._id)}>✅ Accept this patient</button></div>)}</article></div>;
 }
@@ -44,6 +45,7 @@ function MyAppointments({ api, token, user, setMessage }: { api: Api; token: str
     } catch (e: any) { setMessage(e.message); }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => { const f = () => { const x = (window as any).__medaiOpen; if (!x) return; setOpen({ id: x.appointmentId, kind: x.kind }); load(); (window as any).__medaiOpen = null; }; f(); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   const toggle = (id: string, kind: string) => setOpen(open.id === id && open.kind === kind ? { id: "", kind: "" } : { id, kind });
   return <div className="grid">
     <article className="full"><h3>My appointments</h3><button className="outline" onClick={load}>Refresh</button>

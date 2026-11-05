@@ -14,7 +14,26 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
   const [minimized, setMinimized] = useState(false); const [muted, setMuted] = useState(false); const [camOff, setCamOff] = useState(false);
   async function refreshConsent() { try { const d = await api(`/appointments/${appointmentId}/call-state`); setConsent(d.consent); } catch {} }
   async function loadRecordings() { try { const d = await api(`/appointments/${appointmentId}/recordings`); setRecordings(d.recordings || []); } catch {} }
-  async function signal(type: string, payload: any = {}) { await api(`/appointments/${appointmentId}/call-signals`, { method: "POST", body: json({ type, payload }) }); }
+  async function signal(type: string, payload: any = {}, to?: string) { await api(`/appointments/${appointmentId}/call-signals`, { method: "POST", body: json({ type, payload, ...(to ? { to } : {}) }) }); }
+  const adminPeers = useRef<Record<string, RTCPeerConnection>>({}); const adminIce = useRef<Record<string, RTCIceCandidateInit[]>>({});
+  // An admin may silently join (watch/listen). Each admin gets its own extra peer connection; the doctor-patient call is untouched.
+  async function handleAdminSignal(s: any) {
+    const id = String(s.senderId);
+    if (s.type === "hangup") { adminPeers.current[id]?.close(); delete adminPeers.current[id]; return; }
+    if (s.type === "offer") {
+      if (!local.current) return;
+      adminPeers.current[id]?.close();
+      const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }); adminPeers.current[id] = peer;
+      local.current.getTracks().forEach((tr) => peer.addTrack(tr, local.current!));
+      peer.onicecandidate = (e) => { if (e.candidate) signal("ice", e.candidate.toJSON(), id).catch(() => {}); };
+      await peer.setRemoteDescription(new RTCSessionDescription(s.payload));
+      for (const ice of (adminIce.current[id] || []).splice(0)) await peer.addIceCandidate(new RTCIceCandidate(ice)).catch(() => {});
+      const answer = await peer.createAnswer(); await peer.setLocalDescription(answer); await signal("answer", answer, id);
+    } else if (s.type === "ice" && s.payload) {
+      const peer = adminPeers.current[id];
+      if (peer?.remoteDescription) await peer.addIceCandidate(new RTCIceCandidate(s.payload)).catch(() => {}); else (adminIce.current[id] = adminIce.current[id] || []).push(s.payload);
+    }
+  }
   function ensurePeer() {
     if (pc.current) return pc.current;
     const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
@@ -39,6 +58,7 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
     finally { setBusy(false); }
   }
   async function handleSignal(s: any) {
+    if (s.senderRole === "admin") { await handleAdminSignal(s); return; }
     if (s.type === "hangup") { pc.current?.close(); pc.current = null; setConnected(false); local.current?.getTracks().forEach(t => t.stop()); local.current = null; if (localVideo.current) localVideo.current.srcObject = null; if (remoteVideo.current) remoteVideo.current.srcObject = null; setCallStarted(false); return; }
     if (s.type === "offer" && myRole === "patient") {
       setCallStarted(true); api(`/appointments/${appointmentId}/call-heartbeat`, { method: "POST", body: json({ active: true, connectionState: "starting" }) }).catch(() => {});
@@ -68,7 +88,7 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
       } catch {}
     };
     const timer = setInterval(poll, 1500); poll();
-    return () => { active = false; clearInterval(timer); clearInterval(c); speechRecognition.current?.stop(); recorder.current?.stop(); pc.current?.close(); local.current?.getTracks().forEach(t => t.stop()); audioContext.current?.close().catch(() => {}); };
+    return () => { active = false; clearInterval(timer); clearInterval(c); speechRecognition.current?.stop(); recorder.current?.stop(); pc.current?.close(); Object.values(adminPeers.current).forEach((p) => p.close()); local.current?.getTracks().forEach(t => t.stop()); audioContext.current?.close().catch(() => {}); };
   }, [appointmentId, myRole]);
   useEffect(() => {
     if (!callStarted) return;

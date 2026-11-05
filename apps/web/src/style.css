@@ -145,3 +145,27 @@ header .row .outline{flex:none;white-space:nowrap;padding:10px 14px}
 .bsdots{position:absolute;left:0;right:0;bottom:5px;display:flex;justify-content:center;gap:5px}.bsdots i{width:6px;height:6px;border-radius:50%;background:#b9d6df}.bsdots i.on{width:18px;border-radius:99px;background:#087fbd}
 @media(max-width:520px){.bstrip>img{width:60px;height:44px}.bstrip .bannerlink{display:none}}
 footer .copyright{font-size:.82rem;color:var(--muted);margin-top:4px}
+
+/* V3.3 fixes: remove the decorative ring that floated over the welcome card/banner on phones; keep name + Sign out on one line */
+.hero:before{display:none!important}
+header .row{flex-wrap:nowrap;min-width:0;gap:8px}
+header .role{min-width:0;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+header .row button{flex:none;white-space:nowrap}
+.note.unread .noteico{animation:none}
+
+/* ===== V3.4: tidy button menu (no sideways sliding), doctor cards, alerts, admin ===== */
+.tabs{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px!important;overflow:visible!important;flex-wrap:wrap;padding:10px 0!important}
+.tabs button{white-space:normal!important;border-radius:14px!important;min-height:52px;padding:12px 10px!important;font-size:.98rem!important;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px;line-height:1.2}
+@media(max-width:620px){.tabs{grid-template-columns:repeat(2,1fr)}.tabs button{font-size:.95rem!important;padding:12px 8px!important}}
+.docpick{display:grid;gap:10px;max-height:420px;overflow-y:auto;padding:2px}
+.doccard{display:flex;gap:12px;align-items:flex-start;text-align:left;background:#fff;color:inherit;border:2px solid #dbe6ec;border-radius:16px;padding:12px;position:relative;width:100%}
+.doccard.on{border-color:#0f8fa8;background:#eaf8fb}
+.docinfo{display:flex;flex-direction:column;gap:2px;min-width:0}.docinfo span{color:#0f8fa8;font-weight:600}.docinfo small{color:#5b6b78}.docbio{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.docany{width:64px;height:64px;border-radius:50%;background:#e8eef2;display:grid;place-items:center;font-size:1.6rem;flex:none}
+.docok{position:absolute;top:10px;right:12px;background:#0f8fa8;color:#fff;border-radius:50%;width:24px;height:24px;display:grid;place-items:center;font-style:normal}
+.alertwrap{position:fixed;left:50%;transform:translateX(-50%);top:10px;z-index:9999;width:min(94vw,440px);display:grid;gap:8px}
+.alertcard{background:#102a43;color:#fff;border-radius:16px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:grid;gap:8px}
+.alertcard small{display:block;opacity:.85}.callalert{background:#0b7a4b;animation:ringpulse 1.2s infinite}.ring{font-size:1.8rem;animation:ringshake .6s infinite}
+@keyframes ringpulse{50%{box-shadow:0 0 0 8px rgba(11,122,75,.35)}}@keyframes ringshake{25%{transform:rotate(-18deg)}75%{transform:rotate(18deg)}}
+.convlist{display:grid;gap:8px;max-height:480px;overflow-y:auto}.convitem{text-align:left;background:#fff;color:inherit;border:2px solid #dbe6ec;display:grid;gap:2px}.convitem.on{border-color:#0f8fa8}
+.livepill{color:#e5252a;font-weight:800;font-size:.8rem}.obsgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:10px 0}.obscell video{width:100%;background:#000;border-radius:12px;min-height:150px}
