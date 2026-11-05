@@ -12,8 +12,9 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync=promisify(execFile);
 import { escapeRegex, detectMime, detectMimeFromBytes } from "./util.js";
-import { verifyFindings, urgency } from "./reportRules.js";
-import { makeTextPdf } from "./pdf.js";
+import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
+import { checkRedFlags } from "./safety.js";
+import { makeTextPdf, makeReportPdf, makePrescriptionPdf } from "./pdf.js";
 import { z } from "zod";
 import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
@@ -544,15 +545,51 @@ router.get("/medicines",auth,allow("patient","doctor","admin"),wrap(async(req,re
 }));
 
 router.post("/ai/health-information",auth,aiLimiter,wrap(async(req,res)=>{
-  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
   const question=String(req.body.question||"").trim();
-  if(question.length<5||question.length>6000) return res.status(400).json({error:"Question must be 5-6000 characters"});
-  const system="You are MedAI Hospital's health information assistant. Provide general educational information only. Do not diagnose, prescribe, change medicine doses, or claim certainty. Encourage a qualified clinician for personal decisions. For possible emergencies such as severe breathing difficulty, chest pain, stroke symptoms, unconsciousness, or severe bleeding, tell the user to seek emergency care immediately; in Bangladesh they may call 999. Do not ask for identifying details. Explain uncertainty.";
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:question}],temperature:0.2})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed"});
-  const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
+  if(question.length<2||question.length>6000) return res.status(400).json({error:"Message must be 2-6000 characters"});
+  // Rule-based safety screen runs before any AI text.
+  const safety=checkRedFlags(question);
+  if(safety.level==="emergency"){
+    await audit(req,"ai.red_flag_emergency","User",req.user.id,{flags:safety.flags.map(f=>f.id)});
+    return res.json({level:"emergency",flags:safety.flags,answer:`⚠️ ${safety.flags.map(f=>f.message).join(", ")}.\n\n${safety.action}\n\nBangladesh emergency number: ${safety.emergencyNumber}.`,disclaimer:"Rule-based safety alert. This is not a diagnosis."});
+  }
+  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
+  const history=(Array.isArray(req.body.history)?req.body.history:[]).slice(-8).filter(m=>m&&["user","assistant"].includes(m.role)).map(m=>({role:m.role,content:String(m.content||"").slice(0,2000)}));
+  const system="You are MedAI, the friendly health assistant of MedAI Hospital in Bangladesh. Reply in the same language the user writes in (Bangla, English or Banglish written in English letters, answer in Bangla or English). Be warm, clear and short (under 180 words unless asked for more); use simple words and short bullet points when helpful. Give general educational information only: do not diagnose, do not give medicine doses, do not tell the person to start, stop or change a prescription. If the user asks about a medicine, explain what it is generally used for, common cautions and when to ask a pharmacist or doctor; remind them that allergies, pregnancy, age and other medicines matter and a doctor must decide. For possible emergencies tell them to call 999. When useful, suggest booking an appointment in MedAI or uploading a lab report here with the + button. Never ask for names, phone numbers or other identifying details.";
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},...history,{role:"user",content:question}],temperature:0.3,max_tokens:700})});
+  if(!response.ok) return res.status(502).json({error:"AI provider request failed. Please try again."});
+  const data=await response.json(); let answer=data.choices?.[0]?.message?.content;
   if(!answer) return res.status(502).json({error:"AI response was empty"});
-  res.json({answer,disclaimer:"Informational only—not a diagnosis or prescription. Do not share personally identifying health information."});
+  if(safety.level==="urgent") answer=`⚠️ ${safety.action}\n\n${answer}`;
+  res.json({level:safety.level,flags:safety.flags,answer,disclaimer:"Informational only. Not a diagnosis or prescription."});
+}));
+
+// Doctor-only: catalogue-grounded medicine ideas. The doctor decides; doses are never suggested here.
+router.post("/ai/medicine-suggestions",auth,allow("doctor"),aiLimiter,wrap(async(req,res)=>{
+  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
+  const diagnosis=String(req.body.diagnosis||"").trim();
+  if(diagnosis.length<3||diagnosis.length>600) return res.status(400).json({error:"Describe the diagnosis or problem in 3-600 characters"});
+  const appt=await Appointment.findOne({_id:req.body.appointmentId,doctorId:req.user.id,status:{$in:PRESCRIBE_STATUSES}});
+  if(!appt) return res.status(403).json({error:"Open one of your active appointments first"});
+  const patient=await User.findById(appt.patientId).select("dateOfBirth gender allergies currentMedicines");
+  const allergies=(patient?.allergies||[]).map(x=>String(x).toLowerCase()),current=(patient?.currentMedicines||[]).map(x=>String(x).toLowerCase());
+  const ctx={diagnosis,ageYears:ageFromDob(patient?.dateOfBirth),sex:normSex(patient?.gender),allergies:patient?.allergies||[],currentMedicines:patient?.currentMedicines||[]};
+  const system='You assist a licensed Bangladeshi doctor. Suggest up to 5 commonly used GENERIC (INN) medicines for the stated problem as options the doctor may consider. Reply ONLY with JSON: {"suggestions":[{"generic":"","class":"","reason":"one short sentence","cautions":"key cautions, incl. conflict with the patient allergies or current medicines if any"}]}. Never give doses, durations or brand names. Never claim certainty; the doctor decides. Skip any medicine that matches a listed allergy.';
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:JSON.stringify(ctx)}],temperature:0.2,max_tokens:900})});
+  if(!response.ok) return res.status(502).json({error:"AI provider request failed"});
+  const data=await response.json(); const raw=String(data.choices?.[0]?.message?.content||"");
+  let list=[]; try{list=JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0]||"{}").suggestions||[];}catch{list=[];}
+  const out=[];
+  for(const x of list.slice(0,5)){
+    const generic=String(x.generic||"").trim().slice(0,80); if(generic.length<3) continue;
+    const brands=await Medicine.find({active:true,reviewStatus:"verified",generic:new RegExp(escapeRegex(generic.split(/[ ,(]/)[0]),"i")}).limit(6).select("brand generic strength form manufacturer");
+    const lower=generic.toLowerCase();
+    out.push({generic,class:String(x.class||"").slice(0,80),reason:String(x.reason||"").slice(0,240),cautions:String(x.cautions||"").slice(0,300),
+      allergyConflict:allergies.some(a=>a&&(lower.includes(a)||a.includes(lower))),
+      alreadyTaking:current.some(c=>c&&(c.includes(lower)||lower.includes(c))),brands});
+  }
+  await audit(req,"ai.medicine_suggestions","Appointment",appt.id,{count:out.length});
+  res.json({suggestions:out,disclaimer:"AI suggestions are options for the treating doctor only, not a prescription. Check the patient's history, allergies and current medicines yourself, and enter doses yourself."});
 }));
 
 router.get("/admin/audit",auth,allow("admin"),wrap(async(req,res)=>{
@@ -571,11 +608,17 @@ function mailer(){
   return _transport;
 }
 // Never throws: returns true when the mail was handed to the SMTP server.
-async function sendMailSafe(to,subject,text){
+async function sendMailSafe(to,subject,text,html){
   const t=mailer(); if(!t||!to) return false;
-  try{await t.sendMail({from:config.smtpFrom,to,subject,text});return true;}
+  try{await t.sendMail({from:config.smtpFrom,to,subject,text,...(html?{html}:{})});return true;}
   catch(e){console.error("[mail] failed:",e.message);return false;}
 }
+const escHtml=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// Branded HTML email (works without remote images, so it is never blocked).
+function brandedEmail({title,intro,code,buttonText,link,footer}){
+  return `<div style="background:#f4f8fb;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#102e49"><div style="max-width:520px;margin:auto;background:#fff;border:1px solid #dce8ef;border-radius:16px;overflow:hidden"><div style="background:linear-gradient(120deg,#087fbd,#20a58a);padding:18px 24px;color:#fff;font-size:22px;font-weight:700">MedAI <span style="font-weight:400">Hospital</span></div><div style="padding:24px"><h2 style="margin:0 0 12px;font-size:20px">${escHtml(title)}</h2><p style="line-height:1.6;color:#44607a">${intro}</p>${code?`<p style="font-size:30px;letter-spacing:8px;font-weight:700;background:#edf7fa;border-radius:12px;text-align:center;padding:14px;margin:18px 0">${escHtml(code)}</p>`:""}${link?`<p style="text-align:center;margin:22px 0"><a href="${escHtml(link)}" style="background:#087fbd;color:#fff;text-decoration:none;padding:13px 26px;border-radius:12px;font-weight:700;display:inline-block">${escHtml(buttonText||"Open")}</a></p><p style="font-size:12px;color:#60788d;word-break:break-all">If the button does not work, copy this link into your browser:<br>${escHtml(link)}</p>`:""}<p style="font-size:12px;color:#60788d;margin-top:20px">${escHtml(footer||"If you did not request this, you can ignore this email.")}</p></div></div></div>`;
+}
+const resetLink=raw=>`${config.appPublicUrl.replace(/\/$/,"")}/?reset=${raw}`;
 // --- 6-digit email codes (sign-up verification and password reset) ---
 const OTP_SEL="+otpHash +otpExpires +otpAttempts +otpSentAt +otpPurpose";
 const genCode=()=>String(crypto.randomInt(0,1000000)).padStart(6,"0");
@@ -601,45 +644,40 @@ async function emailNotification(userId,title,message){
   const pretty=String(message).replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g,iso=>new Date(iso).toLocaleString("en-GB",{timeZone:"Asia/Dhaka",dateStyle:"medium",timeStyle:"short"})+" (Bangladesh time)");
   await sendMailSafe(u.contactEmail||u.email,`MedAI Hospital: ${title}`,`Hello ${u.name},\n\n${pretty}\n\nOpen MedAI Hospital: ${config.appPublicUrl}\n\n- MedAI Hospital`);
 }
-router.post("/auth/password-reset/request",sensitiveLimiter,wrap(async(req,res)=>{
+router.post("/auth/password-reset/request",otpLimiter,wrap(async(req,res)=>{
   const email=String(req.body.email||"").toLowerCase().trim();
-  const generic={message:"If the account exists, we emailed a 6-digit code and a reset link. The admin team was also notified."};
-  const user=await User.findOne({email}); if(!user) return res.json(generic);
-  if(user.role!=="admin"&&!await ResetRequest.exists({userId:user.id,status:"pending"})){
-    await ResetRequest.create({userId:user.id,email:user.email});
-    const admins=await User.find({role:"admin",status:"active"}).select("_id");
-    for(const a of admins)await notify(a.id,"password_reset_requested","Password reset requested",`${user.name} (${user.role}) asked for a new password.`,"User",user.id);
-  }
+  const generic={message:"If the account exists, we emailed a 6-digit code and a reset link."};
+  const user=await User.findOne({$or:[{email},{contactEmail:email}]}); if(!user) return res.json(generic);
   if(!mailer()||user.status!=="active") return res.json(generic);
   const raw=crypto.randomBytes(32).toString("hex");
   user.passwordResetHash=crypto.createHash("sha256").update(raw).digest("hex");
   user.passwordResetExpires=new Date(Date.now()+30*60*1000);
   const code=await issueOtp(user,"reset"); // saves the reset hash too
-  const link=`${config.appPublicUrl.replace(/\/$/,"")}/reset-password?token=${raw}`;
-  await sendMailSafe(user.contactEmail||user.email,"Reset your MedAI Hospital password",`Your password reset code is: ${code}\n\nEnter it on the sign-in page with your new password. It is valid for 10 minutes.\n\nOr use this one-time link within 30 minutes: ${link}\n\nIf you did not request this, ignore this email.`);
+  const link=resetLink(raw);
+  await sendMailSafe(user.contactEmail||user.email,"Reset your MedAI Hospital password",`Your password reset code is: ${code}\n\nEnter it on the sign-in page with your new password. It is valid for 10 minutes.\n\nOr open this one-time link within 30 minutes and choose a new password: ${link}\n\nIf you did not request this, ignore this email.`,brandedEmail({title:"Reset your password",intro:`Hello ${escHtml(user.name)}, tap the button below and choose a new password. The link works once and expires in 30 minutes.`,buttonText:"Choose a new password",link,code,footer:"The 6-digit code above can also be entered on the sign-in page (valid 10 minutes). If you did not request this, ignore this email."}));
   await audit(req,"auth.password_reset_requested","User",user.id);
   res.json(generic);
 }));
-router.post("/auth/password-reset/complete",sensitiveLimiter,wrap(async(req,res)=>{
+router.post("/auth/password-reset/complete",otpLimiter,wrap(async(req,res)=>{
   const password=String(req.body.newPassword||"");
   if(password.length<14||password.length>128) return res.status(400).json({error:"New password must be 14 to 128 characters"});
   let user=null;
   if(req.body.code){
     const email=String(req.body.email||"").toLowerCase().trim();
-    user=await User.findOne({email,status:"active"}).select(OTP_SEL+" +passwordResetHash +passwordResetExpires");
+    user=await User.findOne({$or:[{email},{contactEmail:email}],status:"active"}).select(OTP_SEL+" +passwordResetHash +passwordResetExpires");
     if(!user) return res.status(400).json({error:"The code is invalid or has expired. Request a new code."});
     const r=await verifyOtp(user,"reset",req.body.code); if(!r.ok) return res.status(400).json({error:r.error});
   } else {
     const token=String(req.body.token||""); if(!token) return res.status(400).json({error:"A valid code or reset link is required"});
     const hash=crypto.createHash("sha256").update(token).digest("hex");
-    user=await User.findOne({passwordResetHash:hash,passwordResetExpires:{$gt:new Date()}}).select(OTP_SEL+" +passwordResetHash +passwordResetExpires");
+    user=await User.findOne({passwordResetHash:hash,passwordResetExpires:{$gt:new Date()},status:"active"}).select(OTP_SEL+" +passwordResetHash +passwordResetExpires");
     if(!user) return res.status(400).json({error:"Reset link is invalid or expired"});
   }
   user.passwordHash=await hashPassword(password); user.passwordChangedAt=new Date(); user.passwordResetHash=undefined; user.passwordResetExpires=undefined; clearOtp(user); await user.save();
   await ResetRequest.updateMany({userId:user.id,status:"pending"},{$set:{status:"dismissed"}});
   sendMailSafe(user.contactEmail||user.email,"Your MedAI Hospital password was changed",`Hello ${user.name},\n\nYour password was just reset. If this was not you, contact the MedAI admin team immediately.\n\n- MedAI Hospital`).catch(()=>{});
   await audit(req,"auth.password_reset_completed","User",user.id);
-  res.json({message:"Password reset completed. Sign in with your new password."});
+  res.json({message:"Password changed. You are now signed in.",token:makeToken(user),user:{id:user.id,name:user.name,email:user.email,role:user.role}});
 }));
 
 // --- Appointment availability and double-booking-safe scheduling ---
@@ -741,7 +779,7 @@ router.post("/prescriptions/:id/sign",auth,allow("doctor"),wrap(async(req,res)=>
   rx.status="signed";
   const signatureBytes=await readStoredFileBuffer(uploadDir,signatureFile);
   const patient=await User.findById(rx.patientId).select("name");
-  const pdfBuffer=await makeTextPdf("MedAI Hospital - Signed Prescription",["FINALIZED / DOCTOR-SIGNED",`Patient: ${patient?.name||"Patient"}`,`Doctor: ${rx.signerName}`,`BMDC: ${rx.signerBmdc||"Not provided"}`,`Date: ${rx.signedAt.toISOString()}`,"",...rx.items.map((x,i)=>`${i+1}. ${x.brand?x.brand+" ("+x.generic+")":x.generic} ${x.strength||""} ${x.form||""} | Dose: ${x.dose} | Frequency: ${x.frequency} | Duration: ${x.duration} | ${x.instructions||""}`),"",`Notes: ${rx.notes||"None"}`,"","Permanent doctor signature image is retained securely with this finalized prescription."],signatureBytes,signatureFile.mimeType);
+  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
   const pdfFile=await storeBuffer({ownerId:rx.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"signed-prescription.pdf",mimeType:"application/pdf",buffer:pdfBuffer});rx.pdfFileId=pdfFile._id;
   await rx.save(); await notify(rx.patientId,"prescription_issued","New prescription issued","Your doctor has issued a signed prescription. It is available in your prescription history.","Prescription",rx.id);
   await audit(req,"prescription.signed","Prescription",rx.id,{signatureHash:rx.signatureHash,algorithm:"Ed25519",signatureImageHash:rx.signatureImageHash});
@@ -938,14 +976,14 @@ router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(asyn
     if(!extractResponse.ok) throw Object.assign(new Error("AI extraction request failed"),{status:502});
     const extractData=await extractResponse.json(); const extraction=String(extractData.choices?.[0]?.message?.content||"");
     try{const match=extraction.match(/\{[\s\S]*\}/); candidates=JSON.parse(match?.[0]||"{}").findings||[];}catch{candidates=[];}
-    const verified=verifyFindings(candidates);
+    const profile=await User.findById(req.user.id).select("dateOfBirth gender"); const verified=verifyFindings(candidates,{age:ageFromDob(profile?.dateOfBirth),sex:normSex(profile?.gender)});
     const explanation=await requestReportAI(extracted,verified.findings);
     const urgencyLevel=urgency(verified.findings);
     report.extractedText=extracted;report.analysisMode=file.mimeType==="application/pdf"?"pdf_text_ocr":"image_vision_ocr";report.findings=verified.findings;report.urgencyLevel=urgencyLevel;report.aiExplanation=explanation;report.status="pending_doctor_review";
-    const aiPdf=await makeTextPdf("MedAI Hospital - AI Medical Report Analysis",[
-      "AI-GENERATED - NOT DOCTOR-APPROVED",`Patient: ${req.user.name}`,`Created: ${new Date().toISOString()}`,`Automated review priority: ${urgencyLevel} (heuristic only)`,"",`Findings verified: ${verified.stats.verified}; unclear: ${verified.stats.unchecked}`,
-      ...verified.findings.map(f=>`${f.name}: ${f.value} ${f.unit} | Range: ${f.normalRange||"not stated"} | ${f.status.toUpperCase()} | ${f.check}`),"","AI Explanation:",explanation,"","Educational information only. Not a diagnosis or treatment recommendation. Doctor review required."
-    ]);
+    const aiPdf=await makeReportPdf({heading:"Lab Report Analysis",subtitle:"AI-assisted report summary",banner:"AI-GENERATED - NOT DOCTOR-APPROVED",
+      meta:[["Patient",req.user.name],["Created",new Date().toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"],["Age / sex used",[ageFromDob(profile?.dateOfBirth)??"n/a",normSex(profile?.gender)||"n/a"].join(" / ")]],
+      urgency:urgencyLevel,findings:verified.findings,stats:verified.stats,explanation,
+      disclaimer:"Educational information only. Not a diagnosis or treatment recommendation. High/low labels come from a rule engine using the printed or table reference range; OCR can misread numbers, so compare with the original report. A doctor must review this."});
     const pdfFile=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category:"report_ai_pdf",originalName:"AI-report-analysis.pdf",mimeType:"application/pdf",buffer:aiPdf});
     report.aiPdfFileId=pdfFile._id; await report.save();
     if(report.doctorId) await notify(report.doctorId,"report_review_requested","Report awaiting review","A patient report has completed AI analysis and needs your review.","MedicalReport",report.id);
@@ -985,9 +1023,12 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
     report.status="signed";report.reviewComment=comment||report.reviewComment;report.reviewedAt=new Date();report.signedAt=new Date();report.signatureImageFileId=signature._id;report.signatureImageHash=crypto.createHash("sha256").update(await readStoredFileBuffer(uploadDir,signature)).digest("hex");
     const signatureBytes=await readStoredFileBuffer(uploadDir,signature);
     const patient=await User.findById(report.patientId).select("name");
-    const finalPdf=await makeTextPdf("MedAI Hospital - Doctor Reviewed Medical Report",[
-      "DOCTOR-APPROVED REPORT",`Patient: ${patient?.name||"Patient"}`,`Reviewing doctor: ${doctor.name}`,`BMDC: ${doctor.doctorProfile?.bmdcNumber||"Not provided"}`,`Approved: ${report.signedAt.toISOString()}`,"",...report.findings.map(f=>`${f.name}: ${f.value} ${f.unit} | Range: ${f.normalRange||"not stated"} | ${f.status.toUpperCase()}`),"","Doctor review:",report.reviewComment||"Reviewed and approved.","","Original AI analysis follows (not a diagnosis):",report.aiExplanation||"","","Doctor signature is stored as a protected image snapshot on this finalized record."
-    ],signatureBytes,signature.mimeType);
+    const finalPdf=await makeReportPdf({heading:"Doctor-Reviewed Lab Report",subtitle:"Reviewed and approved by a doctor",banner:"DOCTOR-APPROVED",bannerColor:"#17805f",
+      meta:[["Patient",patient?.name||"Patient"],["Reviewing doctor",doctor.name],["BMDC",doctor.doctorProfile?.bmdcNumber||"Not provided"],["Approved",report.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"]],
+      urgency:report.urgencyLevel,findings:report.findings,
+      sections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},{heading:"Original AI explanation (not a diagnosis)",text:report.aiExplanation||""}],
+      signatureBuffer:signatureBytes,signatureCaption:"Signature is stored as a protected image snapshot on this finalized record.",
+      disclaimer:"Educational information. Interpretation of results belongs to your doctor."});
     const finalFile=await storeBuffer({ownerId:report.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"doctor-approved-report.pdf",mimeType:"application/pdf",buffer:finalPdf});report.finalPdfFileId=finalFile._id;
     await notify(report.patientId,"report_approved","Doctor-approved report available","Your doctor has reviewed and approved a medical report.","MedicalReport",report.id);
   }
@@ -1085,14 +1126,24 @@ router.get("/admin/password-requests",auth,allow("admin"),wrap(async(req,res)=>{
 }));
 router.post("/admin/password-requests/:id/send",auth,allow("admin"),sensitiveLimiter,wrap(async(req,res)=>{
   const rq=await ResetRequest.findOne({_id:req.params.id,status:"pending"});if(!rq)return res.status(404).json({error:"Request not found or already handled"});
-  const user=await User.findOne({_id:rq.userId,role:{$in:["patient","doctor"]}});if(!user)return res.status(404).json({error:"User not found"});
-  const temporaryPassword=crypto.randomBytes(12).toString("base64url");
-  user.passwordHash=await hashPassword(temporaryPassword);user.passwordChangedAt=new Date();user.passwordResetHash=undefined;user.passwordResetExpires=undefined;await user.save();
-  let emailed=false;const transport=mailer();
-  if(transport){try{await transport.sendMail({from:config.smtpFrom,to:user.email,subject:"Your new MedAI Hospital password",text:`Hello ${user.name},\n\nThe MedAI admin team has set a new temporary password for your account:\n\n${temporaryPassword}\n\nSign in with it and change it from your account page right away. If you did not ask for this, contact the admin team.`});emailed=true;}catch{emailed=false;}}
+  const user=await User.findOne({_id:rq.userId,role:{$in:["patient","doctor"]}}).select("+passwordResetHash +passwordResetExpires");if(!user)return res.status(404).json({error:"User not found"});
+  const to=user.contactEmail||user.email;
+  if(req.body?.mode==="password"){
+    const temporaryPassword=crypto.randomBytes(12).toString("base64url");
+    user.passwordHash=await hashPassword(temporaryPassword);user.passwordChangedAt=new Date();user.passwordResetHash=undefined;user.passwordResetExpires=undefined;await user.save();
+    const emailed=await sendMailSafe(to,"Your new MedAI Hospital password",`Hello ${user.name},\n\nThe MedAI admin team has set a new temporary password for your account:\n\n${temporaryPassword}\n\nSign in at ${config.appPublicUrl} and change it from your account page right away.`,brandedEmail({title:"Your temporary password",intro:`Hello ${escHtml(user.name)}, the admin team set a temporary password for you. Sign in and change it right away.`,code:temporaryPassword,buttonText:"Go to sign in",link:config.appPublicUrl}));
+    rq.status="sent";rq.handledBy=req.user.id;rq.handledAt=new Date();rq.method=emailed?"email":"shown_to_admin";await rq.save();
+    await audit(req,"admin.password_reset_sent","User",user.id,{emailed,mode:"password"});
+    return res.json(emailed?{emailed:true,message:`Temporary password emailed to ${to}.`}:{emailed:false,temporaryPassword,message:"Email is not configured or failed. Share this temporary password securely; it is shown only once."});
+  }
+  // Default: one-time link so the person chooses their own password (valid 24 hours).
+  const raw=crypto.randomBytes(32).toString("hex");
+  user.passwordResetHash=crypto.createHash("sha256").update(raw).digest("hex");user.passwordResetExpires=new Date(Date.now()+24*60*60*1000);await user.save();
+  const link=resetLink(raw);
+  const emailed=await sendMailSafe(to,"Set a new MedAI Hospital password",`Hello ${user.name},\n\nThe MedAI admin team approved your password reset. Open this one-time link within 24 hours and choose a new password:\n${link}`,brandedEmail({title:"Choose a new password",intro:`Hello ${escHtml(user.name)}, the admin team approved your password reset. Tap the button and choose a new password. The link works once and expires in 24 hours.`,buttonText:"Choose a new password",link}));
   rq.status="sent";rq.handledBy=req.user.id;rq.handledAt=new Date();rq.method=emailed?"email":"shown_to_admin";await rq.save();
-  await audit(req,"admin.password_reset_sent","User",user.id,{emailed});
-  res.json(emailed?{emailed:true,message:`New password emailed to ${user.email}.`}:{emailed:false,temporaryPassword,message:"Email is not configured or failed. Share this temporary password securely; it is shown only once."});
+  await audit(req,"admin.password_reset_sent","User",user.id,{emailed,mode:"link"});
+  res.json(emailed?{emailed:true,message:`Reset link emailed to ${to}.`}:{emailed:false,resetLink:link,message:"Email is not configured or failed. Share this one-time link securely; it is shown only once."});
 }));
 router.post("/admin/password-requests/:id/dismiss",auth,allow("admin"),wrap(async(req,res)=>{
   const rq=await ResetRequest.findOneAndUpdate({_id:req.params.id,status:"pending"},{$set:{status:"dismissed",handledBy:req.user.id,handledAt:new Date()}},{new:true});

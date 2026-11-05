@@ -102,6 +102,24 @@ function PatientRecord({ api, token, id, setMessage }: { api: Api; token: string
   </div>;
 }
 
+
+function AiSuggest({ api, appointmentId, onUse, setMessage }: { api: Api; appointmentId?: string; onUse: (item: any) => void; setMessage: (s: string) => void }) {
+  const [dx, setDx] = useState(""); const [busy, setBusy] = useState(false); const [res, setRes] = useState<any>(null);
+  async function run() { if (!appointmentId) { setMessage("Save the prescription from an appointment first."); return; } setBusy(true); setRes(null); try { setRes(await api("/ai/medicine-suggestions", { method: "POST", body: json({ diagnosis: dx, appointmentId }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
+  const use = (s: any, b?: any) => onUse({ ...emptyItem(), generic: b?.generic || s.generic, brand: b?.brand || "", strength: b?.strength || "", form: b?.form || "Tablet", medicineId: b?._id || "" });
+  return <div className="aisugg"><b>✨ AI medicine ideas <span className="muted">(for your review only)</span></b>
+    <div className="row"><input value={dx} onChange={(e) => setDx(e.target.value)} placeholder="Diagnosis / problem, e.g. acute pharyngitis" /><button type="button" className="outline" disabled={busy || dx.trim().length < 3} onClick={run}>{busy ? "Thinking…" : "Suggest"}</button></div>
+    {res && <>{res.suggestions.length === 0 && <p className="muted">No suggestions returned. Try a clearer diagnosis.</p>}
+      {res.suggestions.map((s: any, i: number) => <div key={i} className={"sgitem" + (s.allergyConflict ? " bad" : "")}>
+        <b>{s.generic}</b> <span className="muted">{s.class}</span>
+        {s.allergyConflict && <p className="warn">⚠️ Matches a recorded allergy. Do not prescribe.</p>}{s.alreadyTaking && <p className="warn">Patient already lists this medicine.</p>}
+        <p>{s.reason}</p>{s.cautions && <p className="muted">Cautions: {s.cautions}</p>}
+        <div className="row">{s.brands.slice(0, 5).map((b: any) => <button type="button" key={b._id} className="suggestion" disabled={s.allergyConflict} onClick={() => use(s, b)}>+ {b.brand} {b.strength || ""}</button>)}
+          {s.brands.length === 0 && <button type="button" className="outline" disabled={s.allergyConflict} onClick={() => use(s)}>+ Add generic only</button>}</div></div>)}
+      <p className="muted">{res.disclaimer}</p></>}
+  </div>;
+}
+
 function RxEditor({ api, appointmentId, rx, onSaved, setMessage }: { api: Api; appointmentId?: string; rx?: any; onSaved: () => void; setMessage: (s: string) => void }) {
   const [items, setItems] = useState<any[]>(rx ? rx.items.map((i: any) => ({ ...emptyItem(), ...i, medicineId: i.medicineId || "" })) : [emptyItem()]);
   const [notes, setNotes] = useState<string>(rx?.notes || ""); const [sugg, setSugg] = useState<{ i: number; list: any[] }>({ i: -1, list: [] });
@@ -122,6 +140,7 @@ function RxEditor({ api, appointmentId, rx, onSaved, setMessage }: { api: Api; a
   }
   return <form onSubmit={save} className="record">
     <p className="muted">Doses are entered by you. Check the patient’s allergies and current medicines in “Patient record” before prescribing.</p>
+    <AiSuggest api={api} appointmentId={appointmentId || rx?.appointmentId?._id || rx?.appointmentId} onUse={(m) => setItems((cur) => (cur.length === 1 && !cur[0].generic ? [m] : [...cur, m]))} setMessage={setMessage} />
     {items.map((it, i) => <div className="item" key={i}>
       <label>Medicine (brand or generic name)<input value={it.generic} onChange={(e) => search(i, e.target.value)} placeholder="Type at least 2 letters" required />
         {it.brand && <span className="muted">Selected: {it.brand}</span>}</label>

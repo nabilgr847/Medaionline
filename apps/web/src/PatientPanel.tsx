@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDate, fmtDay, fmtSize, label, listFromText } from "./api";
+import ChatAI, { FindingsList } from "./ChatAI";
 import { useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
@@ -10,7 +11,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "patient");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI information"], ["account", "Account"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
     {tab === "notifications" && <PatientNotifications api={api} setMessage={setMessage} />}
@@ -18,7 +19,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
     {tab === "rx" && <MyPrescriptions api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}
     {tab === "profile" && <Profile api={api} setMessage={setMessage} />}
-    {tab === "ai" && <AskAI api={api} setMessage={setMessage} />}
+    {tab === "ai" && <ChatAI api={api} token={token} setMessage={setMessage} />}
     {tab === "account" && <div className="grid"><ChangePassword api={api} onToken={onToken} setMessage={setMessage} /></div>}
   </div>;
 }
@@ -88,7 +89,7 @@ function Reports({ api, token, setMessage }: { api: Api; token: string; setMessa
     <article className="full"><h3>Explain report text with AI</h3><p className="muted">PDF text extraction/scanned-page OCR is used for PDFs. Report images are sent to the configured vision-capable AI model and cross-checked with Bangla/English OCR. OCR/vision may misread numbers; verify every value against the original. Text analysis is also available below.</p><textarea rows={5} value={reportText} onChange={e => setReportText(e.target.value)} placeholder="Paste test name, result, unit and reference range…" /><button className="primary" disabled={busy || reportText.trim().length < 20} onClick={analyzeReport}>{busy ? "Analyzing…" : "Explain report text"}</button>{reportAnalysis && <pre className="answer">{reportAnalysis}</pre>}</article>
     <article><h3>My reports</h3>{files.length === 0 && reports.length===0 && <p className="muted">No reports uploaded.</p>}
       {files.map((f) => <div className="item" key={f._id}><b>{f.originalName}</b><p className="muted">{fmtDay(f.createdAt)} · {fmtSize(f.size)}</p><div className="row"><button className="outline" onClick={() => downloadFile(token, f._id, f.originalName).catch((e) => setMessage(e.message))}>⬇️ Download original</button><button className="danger" onClick={() => remove(f._id)}>Delete</button></div></div>)}
-      {reports.map((r:any)=><div className="item" key={r._id}><b>AI report review · {label(r.status)}</b><p className="muted">{fmtDay(r.createdAt)} · {r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p>{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)}</article>
+      {reports.map((r:any)=><div className="item" key={r._id}><b>AI report review · {label(r.status)}</b><p className="muted">{fmtDay(r.createdAt)} · {r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p><FindingsList findings={r.findings} />{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)}</article>
   </div>;
 }
 
@@ -182,18 +183,6 @@ function Profile({ api, setMessage }: { api: Api; setMessage: (s: string) => voi
       <label>Emergency contact phone<input value={f.ecPhone} onChange={(e) => set("ecPhone", e.target.value)} /></label>
       <label>Relationship<input value={f.ecRel} onChange={(e) => set("ecRel", e.target.value)} /></label>
       <button className="primary full">Save profile</button></form></article></div>;
-}
-
-function AskAI({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
-  const [q, setQ] = useState(""); const [answer, setAnswer] = useState(""); const [busy, setBusy] = useState(false);
-  async function ask(e: any) {
-    e.preventDefault(); setBusy(true);
-    try { const d = await api("/ai/health-information", { method: "POST", body: json({ question: q }) }); setAnswer(d.answer + "\n\n" + d.disclaimer); } catch (x: any) { setMessage(x.message); } finally { setBusy(false); }
-  }
-  return <div className="grid"><article className="full"><h3>AI health information</h3>
-    <form onSubmit={ask}><textarea placeholder="Ask a general health information question. Do not include your name or other identifying details." value={q} onChange={(e) => setQ(e.target.value)} required minLength={5} />
-      <button className="primary" disabled={busy}>{busy ? "Thinking…" : "Ask MedAI"}</button></form>
-    {answer && <p className="answer">{answer}</p>}</article></div>;
 }
 
 function MedicineDetails({ m }: { m: any }) {

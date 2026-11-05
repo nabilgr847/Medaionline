@@ -100,7 +100,7 @@ export const CallSignal = model("CallSignal",callSignalSchema);
 const medicalReportSchema = new Schema({
   patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true}, doctorId:{type:Schema.Types.ObjectId,ref:"User",default:null,index:true}, originalFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",required:true},
   status:{type:String,enum:["uploaded","ai_processing","ai_analysis_completed","pending_doctor_review","under_review","changes_requested","rejected","approved","signed","delivered"],default:"uploaded",index:true},
-  extractedText:String, analysisMode:{type:String,enum:["pdf_text_ocr","image_vision_ocr"]}, findings:[{name:String,value:String,unit:String,normalRange:String,status:String,check:String}], urgencyLevel:String, aiExplanation:String, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, finalPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},
+  extractedText:String, analysisMode:{type:String,enum:["pdf_text_ocr","image_vision_ocr"]}, findings:[{name:String,value:String,unit:String,normalRange:String,status:String,check:String,key:String,rangeUsed:String,rangeSource:String,conflict:String,deviation:Number,measures:String,meaning:String,source:String,url:String}], urgencyLevel:String, aiExplanation:String, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, finalPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},
   reviewComment:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date
 },{timestamps:true});
 medicalReportSchema.index({doctorId:1,status:1,createdAt:-1});

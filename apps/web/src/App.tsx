@@ -54,7 +54,7 @@ function MainApp() {
   async function resendCode() { try { const d = await api("/auth/resend-code", { method: "POST", body: json({ email }) }); setMessage(d.message); } catch (x: any) { setMessage(x.message); } }
   async function completeReset(e: any) {
     e.preventDefault(); setMessage("");
-    try { const d = await api("/auth/password-reset/complete", { method: "POST", body: json({ email: resetEmail || email, code: code.trim(), newPassword }) }); setMessage(d.message); setStep("form"); setMode("login"); setCode(""); setNewPassword(""); setPassword(""); } catch (x: any) { setMessage(x.message); }
+    try { const d = await api("/auth/password-reset/complete", { method: "POST", body: json({ email: resetEmail || email, code: code.trim(), newPassword }) }); setCode(""); setNewPassword(""); setPassword(""); if (d.token) { setToken(d.token); setStep("form"); setMessage(d.message); } else { setMessage(d.message); setStep("form"); setMode("login"); } } catch (x: any) { setMessage(x.message); }
   }
   async function requestReset() { try { const d = await api("/auth/password-reset/request", { method: "POST", body: json({ email: resetEmail || email }) }); setMessage(d.message); } catch (x: any) { setMessage(x.message); } }
 
@@ -112,16 +112,28 @@ function MainApp() {
     <footer><img src="/branding/medai-logo.svg" alt="" /><p>MedAI Hospital · Your Health, Our Priority</p></footer></div>;
 }
 
+function resetTokenFromUrl() { const q = new URLSearchParams(window.location.search); return q.get("reset") || q.get("token") || ""; }
+
 function ResetPassword() {
-  const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [ok, setOk] = useState(false);
+  const [password, setPassword] = useState(""); const [confirm, setConfirm] = useState(""); const [show, setShow] = useState(false);
+  const [message, setMessage] = useState(""); const [ok, setOk] = useState(false); const [busy, setBusy] = useState(false);
+  const rules = [["At least 14 characters", password.length >= 14], ["Passwords match", password.length > 0 && password === confirm]] as const;
   async function submit(e: any) {
-    e.preventDefault();
-    try { const token = new URLSearchParams(window.location.search).get("token") || ""; const d = await makeApi("")("/auth/password-reset/complete", { method: "POST", body: json({ token, newPassword: password }) }); setMessage(d.message); setOk(true); } catch (x: any) { setMessage(x.message); }
+    e.preventDefault(); if (!rules.every((r) => r[1])) { setMessage("Please meet all the requirements below."); return; }
+    setBusy(true); setMessage("");
+    try { const d = await makeApi("")("/auth/password-reset/complete", { method: "POST", body: json({ token: resetTokenFromUrl(), newPassword: password }) }); setMessage(d.message); setOk(true); if (d.token) { localStorage.setItem("medai_token", d.token); setTimeout(() => window.location.replace("/"), 1200); } else window.history.replaceState({}, "", "/"); }
+    catch (x: any) { setMessage(x.message); } finally { setBusy(false); }
   }
-  return <div className="auth"><div><h2>Reset your MedAI password</h2>
-    {!ok && <form onSubmit={submit}><input type="password" minLength={14} placeholder="New password (minimum 14 characters)" value={password} onChange={(e) => setPassword(e.target.value)} required /><button className="primary">Set new password</button></form>}
-    {message && <p className="notice" role="status" aria-live="polite">{message}</p>}
-    {ok && <a href="/">Go to sign in</a>}</div></div>;
+  return <div className="auth"><div><img src="/branding/medai-logo.svg" alt="MedAI Hospital" style={{ width: 180, marginBottom: 14 }} /><h2>Choose a new password</h2>
+    {!resetTokenFromUrl() && !ok && <p className="warn">This reset link is incomplete. Open the link from your email again, or request a new one from the sign-in page.</p>}
+    {!ok && <form onSubmit={submit}>
+      <input type={show ? "text" : "password"} autoComplete="new-password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+      <input type={show ? "text" : "password"} autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+      <label className="check"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password</label>
+      <ul className="rules">{rules.map(([t, v]) => <li key={t} className={v ? "ok" : ""}>{v ? "✓" : "○"} {t}</li>)}</ul>
+      <button className="primary" disabled={busy}>{busy ? "Saving…" : "Set new password"}</button></form>}
+    {message && <p className={ok ? "notice" : "warn"} role="status" aria-live="polite">{message}</p>}
+    {ok && <a className="bannerlink" href="/">Continue</a>}</div></div>;
 }
 
-export default function App() { return window.location.pathname === "/reset-password" ? <ResetPassword /> : <MainApp />; }
+export default function App() { return window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }

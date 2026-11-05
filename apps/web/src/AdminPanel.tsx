@@ -299,7 +299,7 @@ function RequestsPanel({ api, setMessage }: { api: Api; setMessage: (s: string) 
   const [reqs, setReqs] = useState<any[]>([]); const [users, setUsers] = useState<any[]>([]); const [temp, setTemp] = useState(""); const [busy, setBusy] = useState("");
   async function load() { try { const r = await api("/admin/password-requests?status=pending"); setReqs(r.requests || []); const s = await api("/admin/recent-signups"); setUsers(s.users || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
-  async function send(id: string) { setBusy(id); setTemp(""); try { const r = await api(`/admin/password-requests/${id}/send`, { method: "POST", body: json({}) }); setMessage(r.message); if (r.temporaryPassword) setTemp(r.temporaryPassword); load(); } catch (e: any) { setMessage(e.message); } setBusy(""); }
+  async function send(id: string, mode: "link" | "password" = "link") { setBusy(id); setTemp(""); try { const r = await api(`/admin/password-requests/${id}/send`, { method: "POST", body: json({ mode }) }); setMessage(r.message); if (r.temporaryPassword) setTemp(r.temporaryPassword); if (r.resetLink) setTemp(r.resetLink); load(); } catch (e: any) { setMessage(e.message); } setBusy(""); }
   const [issue, setIssue] = useState<any>(null); const [loginEmail, setLoginEmail] = useState(""); const [pw, setPw] = useState(""); const [cred, setCred] = useState<any>(null); const [auto, setAuto] = useState(false);
   function openIssue(u: any) { setIssue(u); setAuto(false); setLoginEmail(u.status === "pending_approval" ? (u.contactEmail || u.email) : u.email); setPw(""); setCred(null); }
   async function issueLogin(u: any) { setBusy(u._id); setCred(null); try { const body: any = { loginEmail }; if (pw.trim()) body.password = pw.trim(); else if (auto) body.autoPassword = true; const r = await api(`/admin/users/${u._id}/issue-credentials`, { method: "POST", body: json(body) }); setCred(r); setMessage(r.message); setIssue(null); load(); } catch (e: any) { setMessage(e.message); } setBusy(""); }
@@ -309,15 +309,15 @@ function RequestsPanel({ api, setMessage }: { api: Api; setMessage: (s: string) 
   return <div className="grid">
     <article><h3>🔑 Password reset requests</h3><button className="outline" onClick={load}>Refresh</button>
       {reqs.length === 0 && <p className="muted">No pending requests.</p>}
-      {temp && <p className="warn">Temporary password (shown once): <b>{temp}</b></p>}
+      {temp && <p className="warn">Shown once (email was not sent): <b style={{ wordBreak: "break-all" }}>{temp}</b></p>}
       {reqs.map((r) => <div className="item" key={r._id}><b>{r.userId?.name || "Unknown"}</b> · {r.userId?.role} · {r.email}<p className="muted">Asked {fmtDate(r.createdAt)}</p>
-        <div className="row"><button className="primary" disabled={busy === r._id} onClick={() => send(r._id)}>📧 Send new password by email</button><button className="outline" onClick={() => dismiss(r._id)}>Dismiss</button></div></div>)}
-      <p className="muted">A new random password is created and emailed to the user. If email is not configured, it is shown here once so you can share it securely.</p></article>
+        <div className="row"><button className="primary" disabled={busy === r._id} onClick={() => send(r._id, "link")}>📧 Send reset link</button><button className="outline" disabled={busy === r._id} onClick={() => send(r._id, "password")}>🔑 Send temporary password</button><button className="outline" onClick={() => dismiss(r._id)}>Dismiss</button></div></div>)}
+      <p className="muted">The user gets a one-time link (valid 24 hours) to choose their own password. “Temporary password” emails a random password instead. If email is not configured, it is shown here once.</p></article>
     <article><h3>🆕 New accounts</h3>
       {users.length === 0 && <p className="muted">No accounts yet.</p>}
       {cred && <p className="warn">{cred.message}<br />Login ID: <b>{cred.loginEmail}</b>{cred.password && <> · Password (shown once): <b>{cred.password}</b></>}</p>}
       {users.map((u) => <div className="item" key={u._id}><b>{u.name}</b> · {u.role} · {label(u.status)}<p className="muted">{u.contactEmail || u.email}{u.phone ? " · " + u.phone : ""} · joined {fmtDay(u.createdAt)}</p>
-        {u.requestedPassword && <p className="warn">Login ID: <b>{u.email}</b> · Password they chose: <b>{u.requestedPassword}</b></p>}
+        {u.requestedPassword && <p className="muted">Login ID: <b>{u.email}</b> · The person chose their own password (hidden for security).</p>}
         {u.status === "pending_approval" && <div className="row"><button className="primary" disabled={busy === u._id} onClick={() => quickApprove(u)}>✅ Approve &amp; email</button><button className="outline" onClick={() => openIssue(u)}>Approve with new login…</button><button className="danger" onClick={() => rejectSignup(u._id)}>Reject</button></div>}
         {u.status === "active" && u.role !== "admin" && issue?._id !== u._id && <button className="outline" onClick={() => openIssue(u)}>🔐 New login details</button>}
         {issue?._id === u._id && <div className="item"><label>Login ID (email)<input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} /></label>
