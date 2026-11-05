@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
+import { createContext, useContext, useEffect, useState } from "react";
 import { Api, json, fmtDate } from "./api";
+
+export const BannerContext = createContext<any>(null);
 
 const ICONS: Record<string, string> = { appointments: "📅", requests: "📥", rx: "💊", reports: "📄", notifications: "🔔", profile: "👤", nearby: "📍", medicines: "🔎", ai: "🤖", account: "⚙️", doctors: "✅", users: "👥", monitor: "📡", import: "⬆️", banner: "🖼️", security: "🔒", resets: "🔑" };
 
-export function Tabs({ tabs, tab, setTab, badges }: { tabs: [string, string][]; tab: string; setTab: (t: string) => void; badges?: Record<string, number> }) {
-  return <div className="tabs">{tabs.map(([id, text]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
-    {ICONS[id] ? ICONS[id] + " " : ""}{text}{badges && badges[id] > 0 && <span className="reddot" aria-label={badges[id] + " new"}>{badges[id] > 9 ? "9+" : badges[id]}</span>}</button>)}</div>;
+export function Tabs({ tabs, tab, setTab, badges, strip }: { tabs: [string, string][]; tab: string; setTab: (t: string) => void; badges?: Record<string, number>; strip?: string }) {
+  return <>{strip && tab !== "ai" && <BannerStrip where={strip} />}<div className="tabs">{tabs.map(([id, text]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+    {ICONS[id] ? ICONS[id] + " " : ""}{text}{badges && badges[id] > 0 && <span className="reddot" aria-label={badges[id] + " new"}>{badges[id] > 9 ? "9+" : badges[id]}</span>}</button>)}</div></>;
 }
 
 // Red-dot counters shown on tab buttons. Polls every 30 s and when the tab regains focus.
@@ -23,11 +26,13 @@ export function useBadges(api: Api, role: "patient" | "doctor" | "admin"): Recor
       if (live) setB(next);
     }
     load(); const t = setInterval(load, 30000); const f = () => { if (!document.hidden) load(); };
-    document.addEventListener("visibilitychange", f);
-    return () => { live = false; clearInterval(t); document.removeEventListener("visibilitychange", f); };
+    document.addEventListener("visibilitychange", f); window.addEventListener("medai-badges", f);
+    return () => { live = false; clearInterval(t); document.removeEventListener("visibilitychange", f); window.removeEventListener("medai-badges", f); };
   }, [role]);
   return b;
 }
+
+export const Seq = ({ n }: { n: number }) => <span className="seq" aria-label={"Number " + n}>{n}</span>;
 
 const dayKey = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 const timeKey = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -52,8 +57,10 @@ export function SlotPicker({ api, doctorId, value, onChange, fallback }: { api: 
   </div>;
 }
 
-export function BannerSlider({ banner, compact }: { banner: any; compact?: boolean }) {
-  const slides: any[] = (banner?.slides || []).filter(Boolean);
+export const slidesFor = (banner: any, where?: string): any[] => (banner?.slides || []).filter((s: any) => s && (!where || !s.placement || s.placement === "all" || s.placement === where));
+
+export function BannerSlider({ banner, compact, where }: { banner: any; compact?: boolean; where?: string }) {
+  const slides: any[] = slidesFor(banner, where);
   const [i, setI] = useState(0); const [hold, setHold] = useState(false);
   useEffect(() => { setI(0); }, [slides.length]);
   useEffect(() => {
@@ -100,4 +107,38 @@ export function ChangePassword({ api, onToken, setMessage }: { api: Api; onToken
     <input type="password" placeholder="Current password" value={cur} onChange={(e) => setCur(e.target.value)} required />
     <input type="password" placeholder="New password (minimum 14 characters)" minLength={14} value={next} onChange={(e) => setNext(e.target.value)} required />
     <button className="primary">Update password</button></form></article>;
+}
+
+const NOTE_ICON: Record<string, string> = { prescription: "💊", report: "📄", appointment: "📅", account: "👤", call: "📞" };
+const noteIcon = (t: string) => { const k = Object.keys(NOTE_ICON).find((x) => (t || "").includes(x)); return k ? NOTE_ICON[k] : "🔔"; };
+
+// One notification list for patient and doctor. Unread items get a red dot and a tinted card; read items are plain.
+export function Notifications({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+  const [items, setItems] = useState<any[]>([]);
+  async function load() { try { const d = await api("/notifications/mine"); setItems(d.notifications || []); } catch (e: any) { setMessage(e.message); } }
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
+  async function read(id: string) { try { await api(`/notifications/${id}/read`, { method: "POST", body: json({}) }); setItems((l) => l.map((n) => (n._id === id ? { ...n, readAt: new Date().toISOString() } : n))); window.dispatchEvent(new Event("medai-badges")); } catch (e: any) { setMessage(e.message); } }
+  async function readAll() { await Promise.all(items.filter((n) => !n.readAt).map((n) => api(`/notifications/${n._id}/read`, { method: "POST", body: json({}) }).catch(() => {}))); load(); window.dispatchEvent(new Event("medai-badges")); }
+  const unread = items.filter((n) => !n.readAt).length;
+  return <div className="grid"><article className="full"><div className="notehead"><h3>Notifications{unread > 0 && <span className="reddot inline">{unread > 9 ? "9+" : unread}</span>}</h3>
+    <div className="row"><button className="outline" onClick={load}>↻ Refresh</button>{unread > 0 && <button className="outline" onClick={readAll}>Mark all read</button>}</div></div>
+    {items.length === 0 && <p className="muted">No notifications.</p>}
+    <div className="notelist">{items.map((n, idx) => <div key={n._id} className={"note" + (n.readAt ? "" : " unread")} onClick={() => !n.readAt && read(n._id)}>
+      <Seq n={idx + 1} /><span className="noteico" aria-hidden="true">{noteIcon(n.type + " " + (n.resourceType || "").toLowerCase())}</span>
+      <div className="notebody"><b>{n.title}</b><p>{n.message}</p></div>
+      <div className="notemeta"><time>{fmtDate(n.createdAt)}</time>{!n.readAt && <i className="newdot" aria-label="New" />}</div></div>)}</div>
+  </article></div>;
+}
+
+// Slim banner shown at the top of every tab (patient and doctor). Admin controls it from the Banner tab.
+export function BannerStrip({ where }: { where: string }) {
+  const banner = useContext(BannerContext); const slides = slidesFor(banner, where); const [i, setI] = useState(0);
+  useEffect(() => { setI(0); }, [slides.length]);
+  useEffect(() => { if (slides.length < 2) return; const t = setInterval(() => setI((x) => (x + 1) % slides.length), Math.max(3, banner?.intervalSec || 5) * 1000); return () => clearInterval(t); }, [slides.length, banner?.intervalSec]);
+  if (!banner?.active || !slides.length) return null;
+  const s = slides[i % slides.length];
+  return <div className="bstrip" role="complementary"><img src={s.image || "/branding/medai-banner.png"} alt="" />
+    <div key={i} className="slidefade"><b>{s.title}</b>{s.subtitle && <p>{s.subtitle}</p>}</div>
+    {s.linkText && s.linkUrl && <a className="bannerlink" href={s.linkUrl} target="_blank" rel="noopener noreferrer">{s.linkText}</a>}
+    {slides.length > 1 && <div className="bsdots">{slides.map((_, n) => <i key={n} className={n === i % slides.length ? "on" : ""} />)}</div>}</div>;
 }

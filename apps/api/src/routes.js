@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -16,7 +17,7 @@ import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
 import { checkRedFlags } from "./safety.js";
 import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
@@ -560,14 +561,24 @@ router.post("/ai/health-information",auth,aiLimiter,wrap(async(req,res)=>{
   res.json({level:safety.level,flags:safety.flags,answer,disclaimer:"Informational only. Not a diagnosis or prescription."});
 }));
 
+// Saved AI chats (per user, so old chats can be reopened like ChatGPT/Gemini).
+const cleanMsgs=a=>(Array.isArray(a)?a:[]).slice(-200).map(m=>({role:m?.role==="user"?"user":"assistant",content:String(m?.content||"").slice(0,8000),level:m?.level?String(m.level).slice(0,20):undefined,file:m?.file?String(m.file).slice(0,200):undefined,error:m?.error?true:undefined,report:m?.report&&(m.report.id||m.report._id)?{id:String(m.report.id||m.report._id),_id:String(m.report.id||m.report._id)}:undefined}));
+router.get("/ai/chats",auth,wrap(async(req,res)=>{const chats=await ChatSession.find({userId:req.user.id}).select("title updatedAt").sort({updatedAt:-1}).limit(60);res.json({chats});}));
+router.get("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});const chat=await ChatSession.findOne({_id:req.params.id,userId:req.user.id});if(!chat)return res.status(404).json({error:"Chat not found"});res.json({chat});}));
+router.post("/ai/chats",auth,wrap(async(req,res)=>{const messages=cleanMsgs(req.body.messages);const first=messages.find(m=>m.role==="user");const title=String(req.body.title||first?.content||"New chat").replace(/\s+/g," ").trim().slice(0,60)||"New chat";const chat=await ChatSession.create({userId:req.user.id,title,messages});res.json({chat:{_id:chat.id,title:chat.title,updatedAt:chat.updatedAt}});}));
+router.put("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});const chat=await ChatSession.findOneAndUpdate({_id:req.params.id,userId:req.user.id},{$set:{messages:cleanMsgs(req.body.messages)}},{new:true});if(!chat)return res.status(404).json({error:"Chat not found"});res.json({chat:{_id:chat.id,title:chat.title,updatedAt:chat.updatedAt}});}));
+router.delete("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});await ChatSession.deleteOne({_id:req.params.id,userId:req.user.id});res.json({ok:true});}));
+
 // Doctor-only: catalogue-grounded medicine ideas. The doctor decides; doses are never suggested here.
 router.post("/ai/medicine-suggestions",auth,allow("doctor"),aiLimiter,wrap(async(req,res)=>{
   if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
   const diagnosis=String(req.body.diagnosis||"").trim();
   if(diagnosis.length<3||diagnosis.length>600) return res.status(400).json({error:"Describe the diagnosis or problem in 3-600 characters"});
-  const appt=await Appointment.findOne({_id:req.body.appointmentId,doctorId:req.user.id,status:{$in:PRESCRIBE_STATUSES}});
-  if(!appt) return res.status(403).json({error:"Open one of your active appointments first"});
-  const patient=await User.findById(appt.patientId).select("dateOfBirth gender allergies currentMedicines");
+  let appt=null,rep=null;
+  if(req.body.reportId&&mongoose.isValidObjectId(req.body.reportId)) rep=await MedicalReport.findOne({_id:req.body.reportId,doctorId:req.user.id});
+  else appt=await Appointment.findOne({_id:req.body.appointmentId,doctorId:req.user.id,status:{$in:PRESCRIBE_STATUSES}});
+  if(!appt&&!rep) return res.status(403).json({error:"Open one of your active appointments or assigned reports first"});
+  const patient=await User.findById((appt||rep).patientId).select("dateOfBirth gender allergies currentMedicines");
   const allergies=(patient?.allergies||[]).map(x=>String(x).toLowerCase()),current=(patient?.currentMedicines||[]).map(x=>String(x).toLowerCase());
   const ctx={diagnosis,ageYears:ageFromDob(patient?.dateOfBirth),sex:normSex(patient?.gender),allergies:patient?.allergies||[],currentMedicines:patient?.currentMedicines||[]};
   const system='You assist a licensed Bangladeshi doctor. Suggest up to 5 commonly used GENERIC (INN) medicines for the stated problem as options the doctor may consider. Reply ONLY with JSON: {"suggestions":[{"generic":"","class":"","reason":"one short sentence","cautions":"key cautions, incl. conflict with the patient allergies or current medicines if any"}]}. Never give doses, durations or brand names. Never claim certainty; the doctor decides. Skip any medicine that matches a listed allergy.';
@@ -740,6 +751,15 @@ router.post("/appointments/:id/prescriptions",auth,allow("doctor"),wrap(async(re
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
   const rx=await Prescription.create({appointmentId:appt.id,patientId:appt.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000)});
   await audit(req,"prescription.draft_created","Prescription",rx.id); res.status(201).json({prescription:rx});
+}));
+router.post("/reports/:id/prescriptions",auth,allow("doctor"),wrap(async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({error:"Report not found"});
+  const rep=await MedicalReport.findOne({_id:req.params.id,doctorId:req.user.id});
+  if(!rep) return res.status(403).json({error:"Only the assigned doctor can prescribe from this report"});
+  if(!["approved","signed","delivered"].includes(rep.status)) return res.status(409).json({error:"Approve the report first, then write the prescription"});
+  const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
+  const rx=await Prescription.create({reportId:rep.id,patientId:rep.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000)});
+  await audit(req,"prescription.draft_created_from_report","Prescription",rx.id); res.status(201).json({prescription:rx});
 }));
 router.patch("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
   const rx=await Prescription.findById(req.params.id);
@@ -1140,9 +1160,10 @@ const slideSchema=z.object({
   pills:z.array(z.string().trim().min(1).max(40)).max(5).optional().default([]),
   linkText:z.string().trim().max(40).optional().default(""),
   linkUrl:z.string().trim().max(300).refine(v=>!v||/^https?:\/\//i.test(v),"Link must start with http:// or https://").optional().default(""),
+  placement:z.enum(["all","home","patient","doctor"]).optional().default("all"),
   image:z.string().max(1_000_000).refine(v=>!v||/^data:image\/(png|jpeg|webp);base64,/.test(v),"Image must be PNG, JPG or WEBP").optional().default("")
 });
-const bannerSchema=z.object({active:z.boolean(),intervalSec:z.number().int().min(3).max(30).default(5),slides:z.array(slideSchema).min(1).max(6)});
+const bannerSchema=z.object({active:z.boolean(),intervalSec:z.number().int().min(3).max(30).default(5),slides:z.array(slideSchema).min(1).max(10)});
 async function loadBanner(){
   const s=await Setting.findOne({key:"banner"}).lean();const v=s?.value;
   if(!v)return BANNER_DEFAULT;

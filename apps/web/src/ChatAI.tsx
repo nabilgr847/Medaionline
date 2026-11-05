@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API, json, postForm, downloadFile } from "./api";
 import type { Api } from "./api";
@@ -109,6 +110,28 @@ export function ReportView({ api, token, report, previewUrl, onError }: { api: A
 
 export default function ChatAI({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]); const [text, setText] = useState(""); const [busy, setBusy] = useState(false); const [file, setFile] = useState<File | null>(null); const [listening, setListening] = useState(false);
+  const [chatId, setChatId] = useState(""); const [chats, setChats] = useState<{ _id: string; title: string; updatedAt: string }[]>([]); const [hist, setHist] = useState(false); const skipSave = useRef(true);
+  const loadChats = useCallback(async () => { try { const d = await api("/ai/chats"); setChats(d.chats || []); } catch { /* history is best-effort */ } }, [api]);
+  useEffect(() => { loadChats(); }, []);
+  useEffect(() => {
+    if (busy || !msgs.length) return; if (skipSave.current) { skipSave.current = false; return; }
+    const t = setTimeout(async () => {
+      try {
+        if (chatId) await api(`/ai/chats/${chatId}`, { method: "PUT", body: json({ messages: msgs }) });
+        else { const d = await api("/ai/chats", { method: "POST", body: json({ messages: msgs }) }); skipSave.current = true; setChatId(d.chat._id); }
+        loadChats();
+      } catch { /* keep chatting even if saving fails */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [msgs, busy]);
+  function newChat() { skipSave.current = true; setChatId(""); setMsgs([]); setFile(null); setText(""); setHist(false); }
+  async function openChat(id: string) {
+    try { const d = await api(`/ai/chats/${id}`); skipSave.current = true; setChatId(id); setMsgs(d.chat.messages || []); setFile(null); setHist(false); } catch (e: any) { setMessage(e.message); }
+  }
+  async function delChat(id: string) {
+    if (!confirm("Delete this chat?")) return;
+    try { await api(`/ai/chats/${id}`, { method: "DELETE" }); if (id === chatId) newChat(); loadChats(); } catch (e: any) { setMessage(e.message); }
+  }
   const endRef = useRef<HTMLDivElement>(null); const fileRef = useRef<HTMLInputElement>(null); const taRef = useRef<HTMLTextAreaElement>(null); const recRef = useRef<any>(null);
   const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, busy]);
@@ -117,7 +140,7 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
   async function send(preset?: string) {
     const q = (preset ?? text).trim(); if (busy || (!q && !file)) return;
     if (!file && preset === CHIPS[3]) { fileRef.current?.click(); return; }
-    const f = file; setText(""); setFile(null); setBusy(true);
+    const f = file; setText(""); setFile(null); setBusy(true); skipSave.current = false;
     const history = msgs.filter((m) => !m.report && !m.error).slice(-8).map((m) => ({ role: m.role, content: m.content }));
     setMsgs((m) => [...m, { role: "user", content: q || "Please analyse this report", file: f?.name }]);
     try {
@@ -139,9 +162,15 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
     const r = new SR(); r.lang = "bn-BD"; r.interimResults = false; r.onresult = (e: any) => setText((t) => (t ? t + " " : "") + e.results[0][0].transcript); r.onend = () => setListening(false); r.onerror = () => setListening(false);
     recRef.current = r; setListening(true); r.start();
   }
-  return <div className="chatapp">
-    <div className="chathead"><img src="/branding/favicon.svg" alt="" /><div><b>MedAI Assistant</b><small><i className="dot" /> Ask about health, medicines or upload a lab report</small></div>
-      {msgs.length > 0 && <button className="outline" onClick={() => { setMsgs([]); setFile(null); }}>＋ New chat</button>}</div>
+  return <div className={"chatapp" + (hist ? " histopen" : "")}>
+    <aside className="chathist" aria-label="Previous chats">
+      <div className="histtop"><button type="button" className="primary" onClick={newChat}>＋ New chat</button></div>
+      <div className="histlist">{chats.length === 0 && <p className="muted">No saved chats yet.</p>}
+        {chats.map((c) => <div key={c._id} className={"histitem" + (c._id === chatId ? " on" : "")}><button type="button" className="histbtn" onClick={() => openChat(c._id)} title={c.title}><span>{c.title}</span><small>{new Date(c.updatedAt).toLocaleDateString()}</small></button><button type="button" className="histdel" aria-label="Delete chat" onClick={() => delChat(c._id)}>🗑</button></div>)}</div>
+    </aside>
+    <div className="chatmain">
+    <div className="chathead"><button type="button" className="outline histtoggle" onClick={() => setHist(!hist)} aria-label="Chat history">☰</button><img src="/branding/favicon.svg" alt="" /><div><b>MedAI Assistant</b><small><i className="dot" /> Ask about health, medicines or upload a lab report</small></div>
+      <button className="outline" onClick={newChat}>＋ New chat</button></div>
     <div className="chatlog2" aria-live="polite">
       {msgs.length === 0 && <div className="chatempty"><img src="/branding/favicon.svg" alt="" /><h3>How can I help today?</h3><p>বাংলা বা English, যেকোনো ভাষায় লিখুন। I can explain symptoms, medicines and lab reports in simple words.</p>
         <div className="chips">{CHIPS.map((c) => <button key={c} type="button" className="chip" onClick={() => send(c)}>{c}</button>)}</div></div>}
@@ -160,5 +189,6 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
       {SR && <button type="button" className={"cbtn" + (listening ? " rec" : "")} onClick={mic} aria-label="Voice input" title="Voice input (Bangla)">🎤</button>}
       <button type="button" className="cbtn send" onClick={() => send()} disabled={busy || (!text.trim() && !file)} aria-label="Send">↑</button>
     </div>
+  </div>
   </div>;
 }

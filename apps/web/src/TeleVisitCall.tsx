@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useRef, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDay, fmtSize } from "./api";
 

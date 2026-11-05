@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import path from "path";
 import os from "os";
 import fs from "fs/promises";

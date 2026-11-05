@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { config } from "./config.js";

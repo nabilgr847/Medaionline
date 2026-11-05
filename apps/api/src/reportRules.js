@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // Report analysis engine, ported from ReportSimple V3 (rules.py).
 // The AI model never decides high/low/normal: this deterministic module does.
 // Uses 22 reference tests (ranges.json) with age/sex-aware ranges, unit sanity checks,

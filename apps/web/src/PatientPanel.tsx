@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
+import { useEffect, useRef, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDate, fmtDay, fmtSize, label, listFromText } from "./api";
 import ChatAI, { FindingsList, ReportView } from "./ChatAI";
-import { useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
+import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
 
@@ -11,10 +12,10 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "patient");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
+    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
-    {tab === "notifications" && <PatientNotifications api={api} setMessage={setMessage} />}
+    {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
     {tab === "nearby" && <NearbyCare />}
     {tab === "rx" && <MyPrescriptions api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}
@@ -65,11 +66,7 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
 }
 
 
-function PatientNotifications({api,setMessage}:{api:Api;setMessage:(s:string)=>void}){
- const [items,setItems]=useState<any[]>([]);async function load(){try{const d=await api("/notifications/mine");setItems(d.notifications||[]);}catch(e:any){setMessage(e.message);}}useEffect(()=>{load();},[]);
- async function read(id:string){try{await api(`/notifications/${id}/read`,{method:"POST",body:json({})});load();}catch(e:any){setMessage(e.message);}}
- return <div className="grid"><article className="full"><h3>Notifications</h3><button className="outline" onClick={load}>Refresh</button>{items.length===0&&<p className="muted">No notifications.</p>}{items.map(n=><div className="item" key={n._id}><b>{n.title}</b><p>{n.message}</p><p className="muted">{fmtDate(n.createdAt)} · {n.readAt?"Read":"Unread"}</p>{!n.readAt&&<button className="outline" onClick={()=>read(n._id)}>Mark as read</button>}</div>)}</article></div>;
-}
+
 
 function Reports({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
   const [openRid, setOpenRid] = useState("");
@@ -89,31 +86,54 @@ function Reports({ api, token, setMessage }: { api: Api; token: string; setMessa
     <article><h3>Upload audio or video</h3><p className="muted">MP3, M4A, OGG, WAV, MP4, WEBM or MOV. Uploading stores the file privately; it does not automatically transcribe or analyze it.</p><MediaUploader api={api} token={token} setMessage={setMessage} /></article>
     <article className="full"><h3>Explain report text with AI</h3><p className="muted">PDF text extraction/scanned-page OCR is used for PDFs. Report images are sent to the configured vision-capable AI model and cross-checked with Bangla/English OCR. OCR/vision may misread numbers; verify every value against the original. Text analysis is also available below.</p><textarea rows={5} value={reportText} onChange={e => setReportText(e.target.value)} placeholder="Paste test name, result, unit and reference range…" /><button className="primary" disabled={busy || reportText.trim().length < 20} onClick={analyzeReport}>{busy ? "Analyzing…" : "Explain report text"}</button>{reportAnalysis && <pre className="answer">{reportAnalysis}</pre>}</article>
     <article><h3>My reports</h3>{files.length === 0 && reports.length===0 && <p className="muted">No reports uploaded.</p>}
-      {files.map((f) => <div className="item" key={f._id}><b>{f.originalName}</b><p className="muted">{fmtDay(f.createdAt)} · {fmtSize(f.size)}</p><div className="row"><button className="outline" onClick={() => downloadFile(token, f._id, f.originalName).catch((e) => setMessage(e.message))}>⬇️ Download original</button><button className="danger" onClick={() => remove(f._id)}>Delete</button></div></div>)}
-      {reports.map((r:any)=><div className="item" key={r._id}><b>AI report review · {label(r.status)}</b><p className="muted">{fmtDay(r.createdAt)} · {r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p>{openRid !== r._id && <FindingsList findings={r.findings} />}<div className="row"><button className="outline" onClick={() => setOpenRid(openRid === r._id ? "" : r._id)}>{openRid === r._id ? "Hide analysis" : "View analysis"}</button></div>{openRid === r._id && <ReportView api={api} token={token} report={{ ...r, doctorName: r.doctorId?.name }} onError={setMessage} />}{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)}</article>
+      {[...files.map((f: any) => ({ k: "f", t: f.createdAt, f })), ...reports.map((r: any) => ({ k: "r", t: r.createdAt, r }))].sort((x, y) => +new Date(y.t) - +new Date(x.t)).map((e: any, i: number) => e.k === "f" ? ((f: any, n: number) => <div className="item numbered" key={f._id}><div className="itemhead"><Seq n={n} /><b>{f.originalName}</b><time>{fmtDate(f.createdAt)}</time></div><p className="muted">Uploaded file · {fmtSize(f.size)}</p><div className="row"><button className="outline" onClick={() => downloadFile(token, f._id, f.originalName).catch((e) => setMessage(e.message))}>⬇️ Download original</button><button className="danger" onClick={() => remove(f._id)}>Delete</button></div></div>)(e.f, i + 1) : ((r: any, n: number) => <div className="item numbered" key={r._id}><div className="itemhead"><Seq n={n} /><b>AI report review · {label(r.status)}</b><time>{fmtDate(r.createdAt)}</time></div><p className="muted">{r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p>{openRid !== r._id && <FindingsList findings={r.findings} />}<div className="row"><button className="outline" onClick={() => setOpenRid(openRid === r._id ? "" : r._id)}>{openRid === r._id ? "Hide analysis" : "View analysis"}</button></div>{openRid === r._id && <ReportView api={api} token={token} report={{ ...r, doctorName: r.doctorId?.name }} onError={setMessage} />}{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)(e.r, i + 1))}
+      </article>
   </div>;
 }
 
+const RADII = [1000, 2000, 3000, 5000, 8000, 12000, 20000];
+const kmText = (m: number) => (m < 1000 ? m + " m" : m / 1000 + " km");
+const distM = (la1: number, lo1: number, la2: number, lo2: number) => { const R = 6371000, r = Math.PI / 180, dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r; const x = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
 function NearbyCare() {
   const [coords, setCoords] = useState<{lat:number;lon:number}|null>(null);
-  const [places, setPlaces] = useState<any[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [places, setPlaces] = useState<any[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [radius, setRadius] = useState(0);
+  const stop = useRef(false);
+  useEffect(() => () => { stop.current = true; }, []);
+  async function searchRadius(lat: number, lon: number, r: number) {
+    const q = `[out:json][timeout:25];nwr(around:${r},${lat},${lon})[amenity~"hospital|clinic|doctors|pharmacy"];out center tags;`;
+    const response = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: "data=" + encodeURIComponent(q) });
+    if (!response.ok) throw new Error("OpenStreetMap search is temporarily unavailable.");
+    const data = await response.json();
+    return (data.elements || []).map((x: any) => { const la = x.lat ?? x.center?.lat, lo = x.lon ?? x.center?.lon; return { id: x.id, name: x.tags?.name || x.tags?.["name:en"] || x.tags?.amenity || "Healthcare place", type: x.tags?.amenity || "healthcare", lat: la, lon: lo, address: [x.tags?.["addr:street"], x.tags?.["addr:city"]].filter(Boolean).join(", "), dist: Number.isFinite(la) && Number.isFinite(lo) ? distM(lat, lon, la, lo) : Infinity }; })
+      .filter((x: any) => Number.isFinite(x.dist)).sort((a: any, b: any) => a.dist - b.dist).slice(0, 60);
+  }
+  // Searches 1 km, 2 km, 3 km ... step by step, so nearby places appear first and the map zooms out as the range grows.
   async function find() {
-    setError(""); setBusy(true);
+    setError(""); setPlaces([]); setRadius(0); stop.current = false; setBusy(true);
     if (!navigator.geolocation) { setError("Location is not supported by this browser."); setBusy(false); return; }
     navigator.geolocation.getCurrentPosition(async pos => {
-      const lat=pos.coords.latitude, lon=pos.coords.longitude; setCoords({lat,lon});
-      const query=`[out:json][timeout:20];(node(around:8000,${lat},${lon})[amenity~"hospital|clinic|doctors|pharmacy"];way(around:8000,${lat},${lon})[amenity~"hospital|clinic|doctors|pharmacy"];relation(around:8000,${lat},${lon})[amenity~"hospital|clinic|doctors|pharmacy"];);out center tags;`;
-      try {
-        const response=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(query)});
-        if(!response.ok) throw new Error("OpenStreetMap search is temporarily unavailable.");
-        const data=await response.json();
-        const found=(data.elements||[]).map((x:any)=>({id:x.id,name:x.tags?.name||x.tags?.["name:en"]||x.tags?.amenity||"Healthcare place",type:x.tags?.amenity||"healthcare",lat:x.lat??x.center?.lat,lon:x.lon??x.center?.lon,address:[x.tags?.["addr:street"],x.tags?.["addr:city"]].filter(Boolean).join(", ")})).filter((x:any)=>Number.isFinite(x.lat)&&Number.isFinite(x.lon)).slice(0,40);
-        setPlaces(found);
-      } catch(e:any) { setError(e.message||"Could not load nearby places."); } finally { setBusy(false); }
-    }, e=>{setError(e.message||"Allow location permission to search nearby.");setBusy(false);},{enableHighAccuracy:false,timeout:10000});
+      const lat = pos.coords.latitude, lon = pos.coords.longitude; setCoords({ lat, lon });
+      let got = false;
+      for (const r of RADII) {
+        if (stop.current) break;
+        setRadius(r);
+        try { const found = await searchRadius(lat, lon, r); got = true; setPlaces(found); }
+        catch (e: any) { if (!got) setError(e.message || "Could not load nearby places."); break; }
+        await new Promise(res => setTimeout(res, 900));
+      }
+      setBusy(false);
+    }, e => { setError(e.message || "Allow location permission to search nearby."); setBusy(false); }, { enableHighAccuracy: false, timeout: 10000 });
   }
-  const mapSrc=coords?`https://www.openstreetmap.org/export/embed.html?bbox=${coords.lon-0.07}%2C${coords.lat-0.07}%2C${coords.lon+0.07}%2C${coords.lat+0.07}&layer=mapnik&marker=${coords.lat}%2C${coords.lon}`:"";
-  return <div className="grid"><article className="full"><h3>Nearby hospitals & healthcare</h3><p className="muted">Uses OpenStreetMap data, not Google Maps. Results may be incomplete or outdated; call the facility to confirm availability.</p><button className="primary" onClick={find} disabled={busy}>{busy?"Searching…":"Find places near me"}</button>{error&&<p className="warn">{error}</p>}{coords&&<iframe title="OpenStreetMap nearby healthcare map" src={mapSrc} loading="lazy" style={{width:"100%",height:360,border:0,borderRadius:16,marginTop:16}} />}</article><article className="full"><h3>Results within 8 km</h3>{places.length===0&&!busy&&<p className="muted">Tap “Find places near me” to load available map data.</p>}{places.map(p=><div className="item" key={`${p.id}-${p.type}`}><b>{p.name}</b><p className="muted">{p.type}{p.address?` · ${p.address}`:""}</p><a href={`https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=17/${p.lat}/${p.lon}`} target="_blank" rel="noreferrer">Open in OpenStreetMap</a></div>)}</article></div>;
+  const dLat = (Math.max(radius, 1000) / 111000) * 1.15; const dLon = coords ? dLat / Math.max(0.2, Math.cos(coords.lat * Math.PI / 180)) : 0;
+  const mapSrc = coords ? `https://www.openstreetmap.org/export/embed.html?bbox=${coords.lon - dLon}%2C${coords.lat - dLat}%2C${coords.lon + dLon}%2C${coords.lat + dLat}&layer=mapnik&marker=${coords.lat}%2C${coords.lon}` : "";
+  return <div className="grid"><article className="full"><h3>Nearby hospitals & healthcare</h3><p className="muted">Uses OpenStreetMap data, not Google Maps. Results may be incomplete or outdated; call the facility to confirm availability.</p>
+    <div className="row"><button className="primary" onClick={find} disabled={busy}>{busy ? "Searching…" : "Find places near me"}</button>{busy && <button className="outline" onClick={() => { stop.current = true; }}>Stop</button>}</div>
+    {busy && radius > 0 && <p className="searchstate"><span className="spin" /> Searching within <b>{kmText(radius)}</b>… going wider step by step.</p>}
+    {error && <p className="warn">{error}</p>}{coords && <iframe key={radius} title="OpenStreetMap nearby healthcare map" src={mapSrc} loading="lazy" style={{ width: "100%", height: 360, border: 0, borderRadius: 16, marginTop: 16 }} />}</article>
+    <article className="full"><h3>{radius ? `Results within ${kmText(radius)}` : "Results"}{places.length > 0 && <small className="muted"> · {places.length} found</small>}</h3>
+      {places.length === 0 && !busy && <p className="muted">Tap “Find places near me” to load available map data.</p>}
+      {places.length === 0 && busy && <p className="muted">Nothing found yet, still searching wider…</p>}
+      {places.map(p => <div className="item" key={`${p.id}-${p.type}`}><b>{p.name}</b><p className="muted">{p.type} · {p.dist < 1000 ? Math.round(p.dist) + " m" : (p.dist / 1000).toFixed(1) + " km"} away{p.address ? ` · ${p.address}` : ""}</p><a href={`https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=17/${p.lat}/${p.lon}`} target="_blank" rel="noreferrer">Open in OpenStreetMap</a></div>)}</article></div>;
 }
 
 function MediaUploader({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
@@ -140,8 +160,8 @@ function MyPrescriptions({ api, token, user, setMessage }: { api: Api; token: st
   return <div className="grid"><article className="full"><h3>My prescriptions</h3>
     <p className="muted">Take your prescription to a licensed pharmacist. Do not change doses without your doctor.</p>
     {list.length === 0 && <p className="muted">No prescriptions yet.</p>}
-    {list.map((rx) => <div className="item" key={rx._id}>
-      <b>{label(rx.status)}</b> · {fmtDay(rx.signedAt || rx.createdAt)} · Dr. {rx.doctorId?.name}
+    {list.map((rx, idx) => <div className="item numbered" key={rx._id}>
+      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>Dr. {rx.doctorId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time></div>
       {rx.status === "voided" && <p className="warn">This prescription was voided{rx.voidReason ? ": " + rx.voidReason : ""}. Do not use it.</p>}
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}{i.instructions ? " (" + i.instructions + ")" : ""}</p>)}
       {rx.notes && <p className="muted">Notes: {rx.notes}</p>}

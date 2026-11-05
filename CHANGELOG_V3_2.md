@@ -1,0 +1,12 @@
+# V3.2
+- AI chat: saved chat history (sidebar, New chat keeps old chats, delete); new ChatSession model + /ai/chats routes.
+- Notifications (patient + doctor): one shared list, red dot/tint only for unread, icon, aligned date/time, mark all read; tab badge updates instantly.
+- Login page: removed the "Patients create an account..." line.
+- Banner now shows on doctor dashboard too; admin can add/edit/delete slides.
+- Menu tabs bigger; red badge no longer clipped (round glitch fix, if that was it).
+- Nearby care: auto search 1 -> 2 -> 3 -> 5 -> 8 -> 12 -> 20 km, results sorted by distance, map zooms out step by step.
+- Doctor "New requests": explained what Accept does.
+- Numbered (1,2,3...) lists with date+time for notifications, reports, prescriptions (doctor and patient).
+- Doctor Reports tab: To review / Reviewed / All; after "Approve & sign" doctor can write a prescription (with AI medicine ideas) directly from the report. New POST /reports/:id/prescriptions; Prescription.appointmentId optional + reportId.
+- Banners: each slide has a placement (everywhere/home/patient/doctor); shown on home, top of patient+doctor dashboards, and a slim strip above every tab (not AI chat). Admin picks placement; max 10 slides.
+- Copyright (c) 2026 MD Gausur Rahman Nabil added: LICENSE, README, footer, index.html meta, source headers.

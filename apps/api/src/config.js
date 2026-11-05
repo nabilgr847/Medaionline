@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import dotenv from "dotenv";
 import path from "path";
 dotenv.config();

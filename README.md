@@ -92,3 +92,7 @@ See `docs/API_REFERENCE.md`, `docs/IMPLEMENTATION_STATUS.md`, `docs/FEATURE_MATR
 
 ## Gmail / email codes (V2.8)
 Set `SMTP_USER` (your Gmail) and `SMTP_PASS` (Gmail App Password) plus `APP_PUBLIC_URL`. See `.env.gmail.example` and `CHANGELOG_V2_8.md`.
+
+
+---
+© 2026 MD Gausur Rahman Nabil. All rights reserved. See [LICENSE](LICENSE).

@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // Rule-based red-flag screening (port of ReportSimple safety.py). Runs BEFORE any AI answer. No AI involved.
 export const EMERGENCY_NUMBER="999"; // Bangladesh national emergency number
 const EMERGENCY=[

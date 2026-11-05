@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // Do not silently fall back to localhost in production: on a deployed website this
 // points to the visitor's own device and causes registration/login requests to fail.
 export const API: string = String(import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");

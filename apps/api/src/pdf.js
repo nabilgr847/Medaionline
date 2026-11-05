@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import PDFDocument from "pdfkit";
 import fs from "fs";
 import { URGENCY_LABEL } from "./reportRules.js";

@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import mongoose from "mongoose";
 const { Schema, model } = mongoose;
 const userSchema = new Schema({
@@ -77,7 +78,8 @@ export const Message = model("Message", messageSchema);
 export const AuditEvent = model("AuditEvent", auditSchema);
 export const Medicine = model("Medicine", medicineSchema);
 const prescriptionSchema = new Schema({
-  appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",required:true},
+  appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",default:null},
+  reportId:{type:Schema.Types.ObjectId,ref:"MedicalReport",default:null,index:true},
   patientId:{type:Schema.Types.ObjectId,ref:"User",required:true},
   doctorId:{type:Schema.Types.ObjectId,ref:"User",required:true},
   status:{type:String,enum:["draft","signed","voided"],default:"draft"},
@@ -109,6 +111,9 @@ const notificationSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"U
 notificationSchema.index({userId:1,createdAt:-1});
 export const MedicalReport = model("MedicalReport", medicalReportSchema);
 export const Notification = model("Notification", notificationSchema);
+const chatSessionSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},title:{type:String,default:"New chat",maxlength:120},messages:{type:Schema.Types.Mixed,default:[]}},{timestamps:true});
+chatSessionSchema.index({userId:1,updatedAt:-1});
+export const ChatSession = model("ChatSession", chatSessionSchema);
 
 const systemErrorSchema = new Schema({
   requestId:{type:String,index:true}, severity:{type:String,enum:["warning","error","critical"],default:"error"},

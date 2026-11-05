@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import fs from "fs/promises";
 
 // Escape user input before it is used inside a RegExp (prevents regex injection / ReDoS).

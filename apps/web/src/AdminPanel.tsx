@@ -1,3 +1,4 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useState } from "react";
 import { Api, json, downloadFile, fmtDate, fmtDay, label, parseCsv } from "./api";
 import { useBadges, Tabs, ChangePassword } from "./common";
@@ -256,7 +257,7 @@ function shrinkImage(file: File): Promise<string> {
   });
 }
 
-const BLANK_SLIDE = { eyebrow: "", title: "New slide", subtitle: "", pills: [] as string[], linkText: "", linkUrl: "", image: "" };
+const BLANK_SLIDE = { eyebrow: "", title: "New slide", subtitle: "", pills: [] as string[], linkText: "", linkUrl: "", image: "", placement: "all" };
 
 function BannerEditor({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
   const [b, setB] = useState<any>(null); const [n, setN] = useState(0); const [busy, setBusy] = useState(false);
@@ -273,16 +274,17 @@ function BannerEditor({ api, setMessage }: { api: Api; setMessage: (s: string) =
     if (!confirm("Reset the banner to the default design?")) return;
     try { const d = await api("/admin/banner", { method: "DELETE" }); setB(d.banner); setN(0); setMessage(d.message); } catch (x: any) { setMessage(x.message); }
   }
-  function add() { if (b.slides.length >= 6) return setMessage("Maximum 6 slides."); setB({ ...b, slides: [...b.slides, { ...BLANK_SLIDE }] }); setN(b.slides.length); }
+  function add() { if (b.slides.length >= 10) return setMessage("Maximum 10 slides."); setB({ ...b, slides: [...b.slides, { ...BLANK_SLIDE }] }); setN(b.slides.length); }
   function remove() { if (b.slides.length <= 1) return setMessage("Keep at least one slide."); setB({ ...b, slides: b.slides.filter((_: any, idx: number) => idx !== n) }); setN(0); }
   async function pick(f?: File) { if (!f) return; try { setS("image", await shrinkImage(f)); } catch (x: any) { setMessage(x.message); } }
-  return <div className="grid"><article className="full"><h3>Home page banner slideshow</h3>
-    <p className="muted">Slides change automatically on the home page and on the patient dashboard. Changes go live after you press Save.</p>
+  return <div className="grid"><article className="full"><h3>Banner slideshow (home, patient and doctor)</h3>
+    <p className="muted">Slides change automatically on the home page, the top of the patient and doctor dashboards, and as a slim strip above the tabs. Pick where each slide shows. You can add, edit and delete slides here. Changes go live after you press Save.</p>
     <form onSubmit={save}>
       <div className="cols"><label className="check"><input type="checkbox" checked={b.active} onChange={(e) => setB({ ...b, active: e.target.checked })} /> Show banner</label>
         <label>Seconds per slide (3–30)<input type="number" min={3} max={30} value={b.intervalSec} onChange={(e) => setB({ ...b, intervalSec: Math.min(30, Math.max(3, Number(e.target.value) || 5)) })} /></label></div>
       <div className="tabs">{b.slides.map((_: any, idx: number) => <button type="button" key={idx} className={idx === n ? "active" : ""} onClick={() => setN(idx)}>Slide {idx + 1}</button>)}
         <button type="button" className="outline" onClick={add}>➕ Add slide</button></div>
+      <label>Where to show this slide<select value={s.placement || "all"} onChange={(e) => setS("placement", e.target.value)}><option value="all">Everywhere (home, patient, doctor, every tab)</option><option value="home">Home / login page only</option><option value="patient">Patient portal only</option><option value="doctor">Doctor portal only</option></select></label>
       <label>Small heading<input value={s.eyebrow} maxLength={80} onChange={(e) => setS("eyebrow", e.target.value)} /></label>
       <label>Title<input value={s.title} maxLength={140} required onChange={(e) => setS("title", e.target.value)} /></label>
       <label>Description<textarea value={s.subtitle} maxLength={400} onChange={(e) => setS("subtitle", e.target.value)} /></label>

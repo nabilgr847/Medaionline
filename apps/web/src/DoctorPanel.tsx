@@ -1,6 +1,7 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useState } from "react";
 import { Api, json, downloadFile, postForm, fmtDate, fmtDay, fmtSize, label } from "./api";
-import { useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
+import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
 
@@ -14,12 +15,12 @@ export default function DoctorPanel({ api, token, user, onToken, setMessage }: {
   const [tab, setTab] = useState("appointments");
   const badges = useBadges(api, "doctor");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["profile", "My doctor profile"]]} />
+    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "requests" && <Requests api={api} setMessage={setMessage} />}
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
-    {tab === "notifications" && <PortalNotifications api={api} setMessage={setMessage} />}
+    {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
     {tab === "profile" && <DoctorProfile api={api} token={token} onToken={onToken} setMessage={setMessage} />}
   </div>;
 }
@@ -29,9 +30,9 @@ function Requests({ api, setMessage }: { api: Api; setMessage: (s: string) => vo
   async function load() { try { const d = await api("/doctor/unassigned-appointment-requests"); setList(d.requests || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
   async function claim(id: string) { try { await api(`/appointments/${id}/claim`, { method: "POST", body: json({}) }); setMessage("Request assigned to you. Open Appointments to schedule it."); load(); } catch (e: any) { setMessage(e.message); load(); } }
-  return <div className="grid"><article className="full"><h3>Unassigned patient requests</h3><button className="outline" onClick={load}>Refresh</button>
-    {list.length === 0 && <p className="muted">No open requests.</p>}
-    {list.map((a) => <div className="item" key={a._id}><b>{a.patientId?.name || "Patient"}</b> · {fmtDate(a.createdAt)} · {label(a.consultationType)}{a.preferredAt && <> · 🕒 wants {fmtDate(a.preferredAt)}</>}<p>{a.problem}</p><button className="primary" onClick={() => claim(a._id)}>Accept request</button></div>)}</article></div>;
+  return <div className="grid"><article className="full"><h3>New patient requests</h3><p className="muted">Patients who asked for an appointment but have not been given a doctor yet appear here. Press <b>Accept request</b> to take the patient. It then moves to your <b>Appointments</b> tab, where you set the visit time. The first doctor to accept gets the patient.</p><button className="outline" onClick={load}>↻ Refresh</button>
+    {list.length === 0 && <p className="muted">No new requests right now. New ones will show a red number on this tab.</p>}
+    {list.map((a) => <div className="item" key={a._id}><b>{a.patientId?.name || "Patient"}</b> · {fmtDate(a.createdAt)} · {label(a.consultationType)}{a.preferredAt && <> · 🕒 wants {fmtDate(a.preferredAt)}</>}<p>{a.problem}</p><button className="primary" onClick={() => claim(a._id)}>✅ Accept this patient</button></div>)}</article></div>;
 }
 
 function MyAppointments({ api, token, user, setMessage }: { api: Api; token: string; user: any; setMessage: (s: string) => void }) {
@@ -103,9 +104,9 @@ function PatientRecord({ api, token, id, setMessage }: { api: Api; token: string
 }
 
 
-function AiSuggest({ api, appointmentId, onUse, setMessage }: { api: Api; appointmentId?: string; onUse: (item: any) => void; setMessage: (s: string) => void }) {
+function AiSuggest({ api, appointmentId, reportId, onUse, setMessage }: { api: Api; appointmentId?: string; reportId?: string; onUse: (item: any) => void; setMessage: (s: string) => void }) {
   const [dx, setDx] = useState(""); const [busy, setBusy] = useState(false); const [res, setRes] = useState<any>(null);
-  async function run() { if (!appointmentId) { setMessage("Save the prescription from an appointment first."); return; } setBusy(true); setRes(null); try { setRes(await api("/ai/medicine-suggestions", { method: "POST", body: json({ diagnosis: dx, appointmentId }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
+  async function run() { if (!appointmentId && !reportId) { setMessage("Save the prescription from an appointment or report first."); return; } setBusy(true); setRes(null); try { setRes(await api("/ai/medicine-suggestions", { method: "POST", body: json({ diagnosis: dx, appointmentId, reportId }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
   const use = (s: any, b?: any) => onUse({ ...emptyItem(), generic: b?.generic || s.generic, brand: b?.brand || "", strength: b?.strength || "", form: b?.form || "Tablet", medicineId: b?._id || "" });
   return <div className="aisugg"><b>✨ AI medicine ideas <span className="muted">(for your review only)</span></b>
     <div className="row"><input value={dx} onChange={(e) => setDx(e.target.value)} placeholder="Diagnosis / problem, e.g. acute pharyngitis" /><button type="button" className="outline" disabled={busy || dx.trim().length < 3} onClick={run}>{busy ? "Thinking…" : "Suggest"}</button></div>
@@ -120,7 +121,7 @@ function AiSuggest({ api, appointmentId, onUse, setMessage }: { api: Api; appoin
   </div>;
 }
 
-function RxEditor({ api, appointmentId, rx, onSaved, setMessage }: { api: Api; appointmentId?: string; rx?: any; onSaved: () => void; setMessage: (s: string) => void }) {
+function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { api: Api; appointmentId?: string; reportId?: string; rx?: any; onSaved: () => void; setMessage: (s: string) => void }) {
   const [items, setItems] = useState<any[]>(rx ? rx.items.map((i: any) => ({ ...emptyItem(), ...i, medicineId: i.medicineId || "" })) : [emptyItem()]);
   const [notes, setNotes] = useState<string>(rx?.notes || ""); const [sugg, setSugg] = useState<{ i: number; list: any[] }>({ i: -1, list: [] });
   const upd = (i: number, k: string, v: string) => setItems(items.map((x, n) => (n === i ? { ...x, [k]: v } : x)));
@@ -134,13 +135,13 @@ function RxEditor({ api, appointmentId, rx, onSaved, setMessage }: { api: Api; a
     e.preventDefault();
     try {
       const body = json({ items: items.map((x) => ({ ...x, medicineId: x.medicineId || undefined })), notes });
-      if (rx) await api(`/prescriptions/${rx._id}`, { method: "PATCH", body }); else await api(`/appointments/${appointmentId}/prescriptions`, { method: "POST", body });
+      if (rx) await api(`/prescriptions/${rx._id}`, { method: "PATCH", body }); else if (reportId) await api(`/reports/${reportId}/prescriptions`, { method: "POST", body }); else await api(`/appointments/${appointmentId}/prescriptions`, { method: "POST", body });
       onSaved();
     } catch (x: any) { setMessage(x.message); }
   }
   return <form onSubmit={save} className="record">
     <p className="muted">Doses are entered by you. Check the patient’s allergies and current medicines in “Patient record” before prescribing.</p>
-    <AiSuggest api={api} appointmentId={appointmentId || rx?.appointmentId?._id || rx?.appointmentId} onUse={(m) => setItems((cur) => (cur.length === 1 && !cur[0].generic ? [m] : [...cur, m]))} setMessage={setMessage} />
+    <AiSuggest api={api} reportId={reportId || rx?.reportId} appointmentId={appointmentId || rx?.appointmentId?._id || rx?.appointmentId} onUse={(m) => setItems((cur) => (cur.length === 1 && !cur[0].generic ? [m] : [...cur, m]))} setMessage={setMessage} />
     {items.map((it, i) => <div className="item" key={i}>
       <label>Medicine (brand or generic name)<input value={it.generic} onChange={(e) => search(i, e.target.value)} placeholder="Type at least 2 letters" required />
         {it.brand && <span className="muted">Selected: {it.brand}</span>}</label>
@@ -171,8 +172,8 @@ function PrescriptionList({ api, token, setMessage }: { api: Api; token: string;
   async function verify(id: string) { try { const d = await api(`/prescriptions/${id}/verify`); setCheck({ ...check, [id]: d.valid ? "✔ Signature valid and content unchanged" : "✖ Not valid: " + (d.reason || "content or signature mismatch") }); } catch (e: any) { setMessage(e.message); } }
   return <div className="grid"><article className="full"><h3>Prescriptions</h3><button className="outline" onClick={load}>Refresh</button>
     {list.length === 0 && <p className="muted">No prescriptions yet. Create one from an appointment.</p>}
-    {list.map((rx) => <div className="item" key={rx._id}>
-      <b>{label(rx.status)}</b> · {rx.patientId?.name} · {fmtDay(rx.signedAt || rx.createdAt)}
+    {list.map((rx, idx) => <div className="item numbered" key={rx._id}>
+      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>{rx.patientId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time><span className="muted">{rx.reportId ? "from report" : "from appointment"}</span></div>
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}</p>)}
       {rx.signatureHash && <p className="muted">Hash: {rx.signatureHash}</p>}
       <div className="row">
@@ -187,18 +188,30 @@ function PrescriptionList({ api, token, setMessage }: { api: Api; token: string;
 
 
 
-function PortalNotifications({api,setMessage}:{api:Api;setMessage:(s:string)=>void}){
- const [items,setItems]=useState<any[]>([]);async function load(){try{const d=await api("/notifications/mine");setItems(d.notifications||[]);}catch(e:any){setMessage(e.message);}}useEffect(()=>{load();},[]);
- async function read(id:string){try{await api(`/notifications/${id}/read`,{method:"POST",body:json({})});load();}catch(e:any){setMessage(e.message);}}
- return <div className="grid"><article className="full"><h3>Notifications</h3><button className="outline" onClick={load}>Refresh</button>{items.length===0&&<p className="muted">No notifications.</p>}{items.map(n=><div className="item" key={n._id}><b>{n.title}</b><p>{n.message}</p><p className="muted">{fmtDate(n.createdAt)} · {n.readAt?"Read":"Unread"}</p>{!n.readAt&&<button className="outline" onClick={()=>read(n._id)}>Mark as read</button>}</div>)}</article></div>;
-}
 
+
+const REVIEW_OPEN = ["pending_doctor_review", "under_review", "changes_requested"];
+const REVIEW_DONE = ["approved", "signed", "delivered"];
 function DoctorReportReview({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
-  const [reports,setReports]=useState<any[]>([]); const [comments,setComments]=useState<Record<string,string>>({});
-  async function load(){try{const d=await api("/doctor/reports/pending");setReports(d.reports||[]);}catch(e:any){setMessage(e.message);}}
-  useEffect(()=>{load();},[]);
-  async function review(id:string,action:string){try{await api(`/reports/${id}/review`,{method:"POST",body:json({action,comment:comments[id]||""})});setMessage(`Report ${action.replace("_"," ")} successfully.`);load();}catch(e:any){setMessage(e.message);}}
-  return <div className="grid"><article className="full"><h3>Reports awaiting doctor review</h3><button className="outline" onClick={load}>Refresh</button>{reports.length===0&&<p className="muted">No reports pending review.</p>}{reports.map(r=><div className="item" key={r._id}><b>{r.patientId?.name||"Patient"}</b> · {label(r.status)} · {fmtDay(r.createdAt)}<p className="muted">AI-generated analysis — not doctor-approved</p><div className="row"><button className="outline" onClick={()=>downloadFile(token,r.originalFileId?._id||r.originalFileId,"original-report").catch((e)=>setMessage(e.message))}>Open original report</button>{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-analysis.pdf").catch((e)=>setMessage(e.message))}>AI PDF</button>}</div>{(r.findings||[]).map((f:any,i:number)=><p key={i}>{f.name}: {f.value} {f.unit} · <b>{f.status}</b> · {f.check}</p>)}<pre className="answer">{r.aiExplanation}</pre><textarea rows={3} value={comments[r._id]||""} onChange={e=>setComments({...comments,[r._id]:e.target.value})} placeholder="Review comments / rejection reason / requested correction"/><div className="row"><button className="outline" onClick={()=>review(r._id,"start")}>Start review</button><button className="outline" onClick={()=>review(r._id,"comment")}>Save comment</button><button className="outline" onClick={()=>review(r._id,"request_changes")}>Request changes</button><button className="danger" onClick={()=>review(r._id,"reject")}>Reject</button><button className="primary" onClick={()=>review(r._id,"approve")}>Approve &amp; sign</button></div></div>)}</article></div>;
+  const [reports, setReports] = useState<any[]>([]); const [comments, setComments] = useState<Record<string, string>>({}); const [rxFor, setRxFor] = useState(""); const [show, setShow] = useState<"todo" | "done" | "all">("todo");
+  async function load() { try { const d = await api("/reports/mine"); setReports((d.reports || []).filter((r: any) => r.doctorId)); } catch (e: any) { setMessage(e.message); } }
+  useEffect(() => { load(); }, []);
+  async function review(id: string, action: string) { try { await api(`/reports/${id}/review`, { method: "POST", body: json({ action, comment: comments[id] || "" }) }); setMessage(action === "approve" ? "Report approved. You can now write a prescription from it." : `Report ${action.replace("_", " ")} successfully.`); load(); } catch (e: any) { setMessage(e.message); } }
+  const list = reports.filter((r) => (show === "all" ? true : show === "todo" ? REVIEW_OPEN.includes(r.status) : REVIEW_DONE.includes(r.status) || r.status === "rejected"));
+  const dl = (id: string, name: string) => downloadFile(token, id, name).catch((e) => setMessage(e.message));
+  return <div className="grid"><article className="full"><h3>Reports</h3>
+    <div className="row"><button className={show === "todo" ? "primary" : "outline"} onClick={() => setShow("todo")}>To review ({reports.filter((r) => REVIEW_OPEN.includes(r.status)).length})</button><button className={show === "done" ? "primary" : "outline"} onClick={() => setShow("done")}>Reviewed / prescribe</button><button className={show === "all" ? "primary" : "outline"} onClick={() => setShow("all")}>All</button><button className="outline" onClick={load}>↻ Refresh</button></div>
+    {list.length === 0 && <p className="muted">No reports here.</p>}
+    {list.map((r, idx) => { const open = REVIEW_OPEN.includes(r.status); const done = REVIEW_DONE.includes(r.status); return <div className="item numbered" key={r._id}>
+      <div className="itemhead"><Seq n={idx + 1} /><b>{r.patientId?.name || "Patient"}</b><span className={"statuschip " + (done ? "ok" : r.status === "rejected" ? "bad" : "warn")}>{label(r.status)}</span><time>{fmtDate(r.createdAt)}</time></div>
+      <p className="muted">{done ? "Doctor-approved report" : "AI-generated analysis — not doctor-approved"}</p>
+      <div className="row"><button className="outline" onClick={() => dl(r.originalFileId?._id || r.originalFileId, "original-report")}>Open original report</button>{r.aiPdfFileId && <button className="outline" onClick={() => dl(r.aiPdfFileId, "ai-analysis.pdf")}>AI PDF</button>}{r.finalPdfFileId && <button className="outline" onClick={() => dl(r.finalPdfFileId, "doctor-approved-report.pdf")}>Approved PDF</button>}</div>
+      {(open || rxFor === r._id) && <>{(r.findings || []).map((f: any, i: number) => <p key={i}>{f.name}: {f.value} {f.unit} · <b>{f.status}</b> · {f.check}</p>)}<pre className="answer">{r.aiExplanation}</pre></>}
+      {open && <><textarea rows={3} value={comments[r._id] || ""} onChange={(e) => setComments({ ...comments, [r._id]: e.target.value })} placeholder="Review comments / rejection reason / requested correction" />
+        <div className="row"><button className="outline" onClick={() => review(r._id, "start")}>Start review</button><button className="outline" onClick={() => review(r._id, "comment")}>Save comment</button><button className="outline" onClick={() => review(r._id, "request_changes")}>Request changes</button><button className="danger" onClick={() => review(r._id, "reject")}>Reject</button><button className="primary" onClick={() => review(r._id, "approve")}>Approve &amp; sign</button></div></>}
+      {done && <div className="row"><button className="primary" onClick={() => setRxFor(rxFor === r._id ? "" : r._id)}>💊 {rxFor === r._id ? "Close prescription" : "Write prescription / medicines"}</button></div>}
+      {rxFor === r._id && <RxEditor api={api} reportId={r._id} onSaved={() => { setRxFor(""); setMessage("Prescription draft saved. Open the Prescriptions tab to review and sign it."); }} setMessage={setMessage} />}
+    </div>; })}</article></div>;
 }
 
 function DoctorProfile({ api, token, onToken, setMessage }: { api: Api; token: string; onToken: (t: string) => void; setMessage: (s: string) => void }) {

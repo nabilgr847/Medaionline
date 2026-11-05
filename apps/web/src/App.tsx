@@ -1,10 +1,11 @@
+// © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { useEffect, useState } from "react";
 import { makeApi, json } from "./api";
 import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
 import DoctorApply from "./DoctorApply";
-import { BannerSlider } from "./common";
+import { BannerSlider, BannerContext } from "./common";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 const norm = (u: any): User => ({ ...u, id: u.id || u._id });
@@ -58,7 +59,7 @@ function MainApp() {
   }
   async function requestReset() { try { const d = await api("/auth/password-reset/request", { method: "POST", body: json({ email: resetEmail || email }) }); setMessage(d.message); } catch (x: any) { setMessage(x.message); } }
 
-  return <div className="shell">
+  return <BannerContext.Provider value={banner}><div className="shell">
     <header><img src="/branding/medai-logo.svg" alt="MedAI Hospital" />
       <nav><a href="#services">Services</a><a href="#safety">Safety</a>{!user && <a href="#portal" onClick={() => setView("home")}>Sign in</a>}</nav>
       {user && <div className="row"><span className="role">{user.name} · {user.role}</span><button className="outline" onClick={logout}>Sign out</button></div>}</header>
@@ -66,11 +67,10 @@ function MainApp() {
     {!user && view === "apply" && <DoctorApply mode="new" onBack={() => setView("home")} />}
     {!user && view === "more" && <DoctorApply mode="more" onBack={() => setView("home")} />}
     {!user && view === "home" && <>
-      <BannerSlider banner={banner} />
+      <BannerSlider banner={banner} where="home" />
       <section className="auth" id="portal"><div>
         <h2>{step === "code" ? "Verify your email" : step === "reset" ? "Reset your password" : mode === "login" ? "Welcome back" : "Create your patient account"}</h2>
-        <p>Patients create an account with a code sent to their email. Doctors apply for verification. Admin access is privately provisioned.</p>
-        {step === "form" && <>
+                {step === "form" && <>
         <form onSubmit={submitAuth}>
             {mode === "register" && <input autoComplete="name" placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} required minLength={2} />}
             <input type="text" inputMode="email" autoComplete="username" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -101,7 +101,7 @@ function MainApp() {
 
     {user && <section className="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
-      {user.role === "patient" && <BannerSlider banner={banner} compact />}
+      {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
       {user.role === "patient" && <PatientPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "doctor" && <DoctorPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "admin" && <AdminPanel api={api} token={token} onToken={setToken} setMessage={setMessage} />}
@@ -109,7 +109,7 @@ function MainApp() {
 
     <section id="services"><p className="eyebrow">CARE, CONNECTED</p><h2>Tools to support your health journey</h2><div className="grid three"><article><div className="service-icon" aria-hidden="true">▤</div><h3>Medical report hub</h3><p>Organize private reports and share them only through authorized care workflows.</p></article><article><div className="service-icon" aria-hidden="true">✚</div><h3>Doctor consultation</h3><p>Appointment requests, clinician messaging and doctor-written prescriptions.</p></article><article><div className="service-icon" aria-hidden="true">♡</div><h3>Medicine information</h3><p>Structured medicine information for review. MedAI does not independently prescribe treatment.</p></article></div></section>
     <section id="safety"><p className="eyebrow">SAFETY BY DESIGN</p><h2>Clinical safety comes first</h2><p>MedAI provides general health information and organization tools. It is not a diagnosis, a substitute for a qualified clinician, or an emergency service. For severe breathing difficulty, chest pain, stroke symptoms, unconsciousness, or severe bleeding, seek emergency care immediately. In Bangladesh, call 999.</p></section>
-    <footer><img src="/branding/medai-logo.svg" alt="" /><p>MedAI Hospital · Your Health, Our Priority</p></footer></div>;
+    <footer><img src="/branding/medai-logo.svg" alt="" /><p>MedAI Hospital · Your Health, Our Priority</p><p className="copyright">© {new Date().getFullYear() < 2026 ? 2026 : new Date().getFullYear()} MD Gausur Rahman Nabil. All rights reserved.</p></footer></div></BannerContext.Provider>;
 }
 
 function resetTokenFromUrl() { const q = new URLSearchParams(window.location.search); return q.get("reset") || q.get("token") || ""; }
