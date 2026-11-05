@@ -3,15 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { API, Api, json, fmtDate } from "./api";
 import { Chat } from "./common";
 
-export function DoctorPhoto({ token, doctor, size = 64 }: { token: string; doctor: any; size?: number }) {
+export function DoctorPhoto({ token, doctor, size = 64, v = 0 }: { token: string; doctor: any; size?: number; v?: number }) {
   const [src, setSrc] = useState("");
   useEffect(() => {
     let url = ""; let live = true;
     if (!doctor?.hasPhoto || !API) return;
-    fetch(`${API}/api/doctors/${doctor._id}/photo`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API}/api/doctors/${doctor._id}/photo${v ? "?v=" + v : ""}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.blob() : Promise.reject())).then((b) => { url = URL.createObjectURL(b); if (live) setSrc(url); }).catch(() => {});
     return () => { live = false; if (url) URL.revokeObjectURL(url); };
-  }, [doctor?._id, doctor?.hasPhoto, token]);
+  }, [doctor?._id, doctor?.hasPhoto, token, v]);
   const style = { width: size, height: size, borderRadius: "50%", objectFit: "cover" as const, flex: "none" as const };
   return src ? <img src={src} alt={doctor.name} style={style} /> : <div style={{ ...style, background: "#dff1f5", display: "grid", placeItems: "center", fontSize: size / 2.2 }} aria-hidden="true">🩺</div>;
 }

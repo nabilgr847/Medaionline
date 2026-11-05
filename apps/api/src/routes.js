@@ -993,6 +993,15 @@ router.post("/doctor/signature",auth,allow("doctor"),signatureUpload.single("fil
   await audit(req,"doctor.signature_updated","User",doctor.id,{signatureFileId:file.id});
   res.status(201).json({signature:{fileId:file.id,originalName:file.originalName,updatedAt:doctor.doctorProfile.signatureUpdatedAt}});
 }));
+const photoUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:3*1024*1024,files:1},fileFilter:(_req,file,cb)=>{const ok=["image/png","image/jpeg","image/webp"].includes(file.mimetype);cb(ok?null:new Error("Profile photo must be a JPG, PNG or WEBP image up to 3 MB"),ok);}});
+router.post("/doctor/photo",auth,allow("doctor"),photoUpload.single("file"),validateUploads,wrap(async(req,res)=>{
+  if(!req.file) return res.status(400).json({error:"Choose a photo"});
+  const old=await PrivateFile.find({ownerId:req.user.id,category:"doctor_photo"});
+  const file=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category:"doctor_photo",originalName:req.file.originalname,mimeType:req.file.mimetype,buffer:req.file.buffer});
+  for(const o of old){try{if(o.storageProvider==="gridfs") await deleteGridFSFile(o.storedName);await o.deleteOne();}catch{}}
+  await audit(req,"doctor.photo_updated","User",req.user.id,{fileId:file.id});
+  res.status(201).json({photo:{fileId:file.id,updatedAt:file.createdAt}});
+}));
 router.get("/doctor/signature",auth,allow("doctor"),wrap(async(req,res)=>{
   const doctor=await User.findById(req.user.id); const file=doctor.doctorProfile?.signatureFileId?await PrivateFile.findOne({_id:doctor.doctorProfile.signatureFileId,ownerId:req.user.id,category:"doctor_signature"}):null;
   res.json({signature:file?{fileId:file.id,originalName:file.originalName,updatedAt:doctor.doctorProfile.signatureUpdatedAt}:null});
