@@ -1,8 +1,10 @@
 node_modules/
+dist/
 .env
 .env.*
 !.env.example
-!.env.gmail.example
-private_uploads/
-dist/
+uploads/
+storage/
 *.log
+.DS_Store
+coverage/

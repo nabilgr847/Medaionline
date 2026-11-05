@@ -36,3 +36,8 @@ Generated: 2026-11-04
 ## V2.6 update files
 - `CHANGELOG_V2_6.md` and `RELEASE_NOTES_V2_6_BN.md` describe report-image vision support, Admin live monitoring, online-presence heartbeats, and metadata-only call-session tracking.
 - `docs/IMPLEMENTATION_STATUS.md`, `docs/FEATURE_MATRIX.md`, `docs/DEPLOYMENT.md`, and `TESTING_REPORT.md` document scope, configuration, and outstanding validation.
+
+## V3.1 changed files
+- apps/api/src/fileStorage.js, routes.js, models.js, pdf.js
+- apps/web/src/ChatAI.tsx, PatientPanel.tsx, style.css
+- CHANGELOG_V3_1.md, MANIFEST.md

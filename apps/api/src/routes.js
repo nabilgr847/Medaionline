@@ -14,7 +14,7 @@ const execFileAsync=promisify(execFile);
 import { escapeRegex, detectMime, detectMimeFromBytes } from "./util.js";
 import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
 import { checkRedFlags } from "./safety.js";
-import { makeTextPdf, makeReportPdf, makePrescriptionPdf } from "./pdf.js";
+import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
 import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
@@ -91,10 +91,6 @@ function cleanRxItems(raw){
   return {items};
 }
 
-// Pending sign-up passwords are kept encrypted (AES-256-GCM, key derived from JWT_SECRET) only until the admin approves/rejects, so the admin can see and send them.
-const PW_KEY=crypto.createHash("sha256").update("pending-password:"+config.jwtSecret).digest();
-function sealPw(t){const iv=crypto.randomBytes(12);const c=crypto.createCipheriv("aes-256-gcm",PW_KEY,iv);const e=Buffer.concat([c.update(t,"utf8"),c.final()]);return [iv,c.getAuthTag(),e].map(b=>b.toString("base64")).join(".");}
-function openPw(v){try{const [iv,tag,e]=String(v||"").split(".").map(x=>Buffer.from(x,"base64"));const d=crypto.createDecipheriv("aes-256-gcm",PW_KEY,iv);d.setAuthTag(tag);return Buffer.concat([d.update(e),d.final()]).toString("utf8");}catch{return "";}}
 router.post("/auth/register", applyLimiter, wrap(async(req,res)=>{
   // Patient signs up with name, email and own password. A 6-digit code is emailed; the account opens only after the code is entered.
   // If email (SMTP) is not configured, falls back to the older admin-approval flow.
@@ -105,9 +101,9 @@ router.post("/auth/register", applyLimiter, wrap(async(req,res)=>{
   if(existing && existing.status!=="pending_email") return res.status(409).json({error:"Email already registered"});
   if(!mailer()){
     if(existing) return res.status(409).json({error:"Email already registered"});
-    const user=await User.create({name:s.data.name,email,contactEmail:email,phone:s.data.phone,passwordHash:await hashPassword(s.data.password),pendingPassword:sealPw(s.data.password),role:"patient",status:"pending_approval"});
+    const user=await User.create({name:s.data.name,email,contactEmail:email,phone:s.data.phone,passwordHash:await hashPassword(s.data.password),role:"patient",status:"pending_approval"});
     const admins=await User.find({role:"admin",status:"active"}).select("_id");
-    for(const a of admins)await notify(a.id,"new_account_requested","New account request",`${user.name} (${email}${user.phone?", "+user.phone:""}) asked for a new account. Open Requests > New accounts to see their email and password and approve it. The person will be emailed after approval.`,"User",user.id);
+    for(const a of admins)await notify(a.id,"new_account_requested","New account request",`${user.name} (${email}${user.phone?", "+user.phone:""}) asked for a new account. Open Requests > New accounts to approve it. The person will be emailed after approval.`,"User",user.id);
     await audit(req,"patient.register_request","User",user.id);
     return res.status(201).json({message:"Your account request was sent to the admin. After approval, the admin will email you at this address. Then you can sign in with your email and password.",user:{id:user.id,name:user.name,email:user.email,role:user.role}});
   }
@@ -950,46 +946,120 @@ async function extractReportText(file){
   const {createWorker}=await import("tesseract.js"); const worker=await createWorker("eng+ben");
   try{const out=await worker.recognize(await readStoredFileBuffer(uploadDir,file));return String(out.data?.text||"").trim();}finally{await worker.terminate();}
 }
-async function requestReportAI(extracted,verified){
-  if(!config.openRouterKey) throw Object.assign(new Error("AI provider is not configured"),{status:503});
-  const system="You are a cautious medical report explainer. Never diagnose or prescribe. Treat numeric status supplied in VERIFIED FINDINGS as authoritative and never change it. Explain uncertainty, units, and reference ranges. If data is unclear, explicitly say so. Respond in clear English and do not repeat personal identifiers.";
-  const payload={extractedText:extracted.slice(0,12000),verifiedFindings:verified};
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:JSON.stringify(payload)}],temperature:0.1})});
-  if(!response.ok) throw Object.assign(new Error("AI provider request failed"),{status:502}); const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
-  if(!answer) throw Object.assign(new Error("AI response was empty"),{status:502}); return String(answer).slice(0,12000);
+// ---- V3.1 report analysis: document-type detection, structured AI reading, guaranteed doctor routing ----
+const RX_FORM=/\b(tab|tablet|cap|capsule|syp|syrup|inj|injection|drops?|oint|ointment|cream|susp)\.?\s+[A-Za-z]/gi;
+const RX_FREQ=/\b(bd|tds|qid|od|hs|sos|stat|1\s*\+\s*0\s*\+\s*1|1\s*\+\s*1\s*\+\s*1|0\s*\+\s*0\s*\+\s*1|1\s*\+\s*0\s*\+\s*0|twice daily|once daily)\b/i;
+const IMAGING_RE=/\b(retina|retinal|fundus|oct|x-?ray|radiograph|ultrasound|ultrasonography|usg|sonogra\w*|mri|ct scan|ecg|ekg|echocardio\w*|mammogra\w*|endoscop\w*|imaging|dicom)\b/i;
+function classifyDoc({text,filename,mime}){
+  const t=String(text||"").slice(0,8000),name=String(filename||"");
+  const forms=(t.match(RX_FORM)||[]).length;
+  if(/prescription/i.test(name)||/\bprescription\b/i.test(t)||(/\bRx\b/.test(t)&&forms>=1)||(forms>=2&&RX_FREQ.test(t))) return "prescription";
+  if(IMAGING_RE.test(t)||IMAGING_RE.test(name)) return "imaging";
+  if(mime!=="application/pdf"&&t.replace(/\s/g,"").length<40) return "imaging";
+  return "lab";
+}
+const DOC_LABEL={lab:"Lab report",imaging:"Imaging report",prescription:"Prescription"};
+const asList=(v,n=8,len=300)=>(Array.isArray(v)?v:[]).map(x=>typeof x==="string"?x:(x&&typeof x==="object"?[x.name,x.why||x.purpose].filter(Boolean).join(" - "):"")).map(s=>String(s).trim().slice(0,len)).filter(Boolean).slice(0,n);
+const asBullets=list=>list.map(s=>"- "+s).join("\n");
+function reportSections(st={},docType="lab",nextText=""){
+  const lead=[],rest=[];
+  if(st.summary) lead.push({heading:"Summary",text:String(st.summary).slice(0,1500)});
+  const out=asList(st.stands_out); if(out.length) lead.push({heading:"What stands out",text:asBullets(out)});
+  if(nextText) lead.push({heading:"What to do next",text:nextText});
+  if(PDF_HAS_BANGLA&&st.bangla_summary) rest.push({heading:"Bangla summary",text:String(st.bangla_summary).slice(0,1200)});
+  const tests=asList(st.tests_to_do); if(tests.length) rest.push({heading:"Tests to do",text:asBullets(tests)});
+  if(docType==="prescription"){const meds=(Array.isArray(st.medicines)?st.medicines:[]).slice(0,30).map(m=>[m?.name,m?.dose,m?.frequency,m?.duration,m?.purpose?"for "+m.purpose:""].filter(Boolean).join(" | ")).filter(Boolean);rest.push({heading:"Medicines in this prescription (as printed)",text:meds.length?asBullets(meds):"No medicine lines could be read clearly."});}
+  else rest.push({heading:"Medicines",text:"No medicine suggested. A doctor must examine first."});
+  if(st.when_to_see_doctor) rest.push({heading:"When to see a doctor",text:String(st.when_to_see_doctor).slice(0,600)});
+  const q=asList(st.questions_to_ask); if(q.length) rest.push({heading:"Questions to ask your doctor",text:asBullets(q)});
+  const tips=asList(st.general_tips); if(tips.length) rest.push({heading:"General tips",text:asBullets(tips)});
+  rest.push({heading:"Medical information sources",text:"MedlinePlus (NIH) | NHS | WHO | FDA Drug Information | DailyMed | DGDA Bangladesh | MedEx Bangladesh"});
+  return {lead,rest};
+}
+async function callOpenRouter(messages,temperature=0.1){
+  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages,temperature})});
+  if(!response.ok) throw Object.assign(new Error("AI provider request failed"),{status:502});
+  const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
+  if(!answer) throw Object.assign(new Error("AI response was empty"),{status:502});
+  return String(answer);
+}
+const SCHEMA_HINT='Return ONLY valid JSON: {"report_type":"","report_date":"","facility":"","summary":"2-4 plain sentences","stands_out":["short points"],"bangla_summary":"1-3 sentences in Bangla","tests_to_do":[{"name":"","why":""}],"when_to_see_doctor":"","questions_to_ask":[""],"general_tips":[""],"medicines":[{"name":"","dose":"","frequency":"","duration":"","purpose":""}]}. Leave unknown fields empty. "medicines" is only for a prescription and must copy what is printed.';
+async function requestStructuredAI({docType,extracted,verified,imageDataUrl}){
+  const rules={
+    lab:"You are a cautious lab-report explainer. Treat the numeric status in VERIFIED FINDINGS as authoritative and never change it. Explain what stands out, with uncertainty and units. Never diagnose or prescribe.",
+    imaging:"You are a cautious explainer of imaging/diagnostic reports (retina, X-ray, ultrasound, MRI, CT, ECG...). You are not a radiologist. Say only what the text or image plainly shows (what kind of report it is, date, facility). Do NOT call the image normal or abnormal, do NOT diagnose; recommend review by the right specialist.",
+    prescription:"You read a doctor's prescription for the patient. List each medicine exactly as printed (name, dose, frequency, duration) and explain in plain words what each is generally used for. Do not change doses, add medicines, or give new medical advice. If something is unreadable say so."
+  }[docType];
+  const system=`${rules} Never repeat addresses or ID numbers. Write English except bangla_summary. ${SCHEMA_HINT}`;
+  const payload=JSON.stringify({documentType:docType,extractedText:String(extracted||"").slice(0,12000),verifiedFindings:verified||[]});
+  const content=imageDataUrl?[{type:"text",text:payload},{type:"image_url",image_url:{url:imageDataUrl}}]:payload;
+  const raw=await callOpenRouter([{role:"system",content:system},{role:"user",content}],0.1);
+  let st={};try{st=JSON.parse((raw.match(/\{[\s\S]*\}/)||["{}"])[0]);}catch{st={summary:raw.slice(0,1500)};}
+  if(!st||typeof st!=="object") st={summary:raw.slice(0,1500)};
+  if(!st.summary) st.summary="The AI could not read enough of this file. Please compare with your original and ask your doctor.";
+  return st;
+}
+async function pickReportDoctor(patientId,preferredId){
+  if(/^[a-f0-9]{24}$/i.test(String(preferredId||""))){const d=await User.findOne({_id:preferredId,role:"doctor",status:"active"}).select("_id");if(d) return d._id;}
+  const appt=await Appointment.findOne({patientId,doctorId:{$ne:null},status:{$in:DOCTOR_ACCESS_STATUSES}}).sort({updatedAt:-1});
+  if(appt?.doctorId){const d=await User.findOne({_id:appt.doctorId,role:"doctor",status:"active"}).select("_id");if(d) return d._id;}
+  // No appointment: auto-assign the active doctor with the fewest reports waiting, so the draft always reaches a doctor.
+  const doctors=await User.find({role:"doctor",status:"active"}).select("_id").limit(200);
+  if(!doctors.length) return null;
+  const load=await MedicalReport.aggregate([{$match:{doctorId:{$in:doctors.map(d=>d._id)},status:{$in:["pending_doctor_review","under_review","changes_requested"]}}},{$group:{_id:"$doctorId",n:{$sum:1}}}]);
+  const m=new Map(load.map(x=>[String(x._id),x.n]));
+  doctors.sort((a,b)=>(m.get(String(a._id))||0)-(m.get(String(b._id))||0));
+  return doctors[0]._id;
+}
+function flowSteps(status,doctorName){
+  const approved=["approved","signed","delivered"].includes(status),rejected=status==="rejected";
+  return [{label:"AI analysis",sub:"Done",state:"done"},
+    {label:"Sent to doctor",sub:doctorName?`Dr. ${doctorName}`:"Waiting for assignment",state:doctorName?"done":"current"},
+    {label:"Doctor approval",sub:approved?"Approved":rejected?"Not approved":status==="changes_requested"?"Changes requested":status==="under_review"?"In review":"Waiting",state:approved?"done":rejected?"bad":doctorName?"current":"todo"}];
 }
 router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(async(req,res)=>{
   const file=await PrivateFile.findOne({_id:req.params.fileId,ownerId:req.user.id,category:"patient_report"}); if(!file) return res.status(404).json({error:"Patient report file not found"});
   if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
-  const appt=await Appointment.findOne({patientId:req.user.id,doctorId:{$ne:null},status:{$in:DOCTOR_ACCESS_STATUSES}}).sort({updatedAt:-1});
-  const report=await MedicalReport.create({patientId:req.user.id,doctorId:appt?.doctorId||null,originalFileId:file._id,status:"ai_processing"});
+  const doctorId=await pickReportDoctor(req.user.id,req.body?.doctorId);
+  const report=await MedicalReport.create({patientId:req.user.id,doctorId:doctorId||null,originalFileId:file._id,status:"ai_processing"});
   try{
+    const isPdf=file.mimeType==="application/pdf";
+    const bytes=await readStoredFileBuffer(uploadDir,file);
     let extracted="";
-    try { extracted=(await extractReportText(file)).slice(0,12000); }
-    catch(e) { if(file.mimeType==="application/pdf") throw e; /* image vision can proceed if OCR fails */ }
-    if(extracted.length<20 && file.mimeType==="application/pdf") throw Object.assign(new Error("No readable report text found in PDF. Check Poppler/Tesseract availability or upload a clearer report."),{status:422});
-    // Images are sent to a vision-capable model as well as OCR; PDF files use extracted/OCR text.
-    const extractionPrompt="Extract medical laboratory findings. Return only JSON {\"findings\":[{\"name\":\"\",\"value\":\"exactly as printed\",\"unit\":\"\",\"normal_range\":\"exactly as printed\"}]}. Never infer or correct numbers. Flag unreadable content. OCR cross-check: "+(extracted||"No usable OCR text was extracted; inspect the attached report image directly.");
-    const extractionContent=file.mimeType==="application/pdf"?extractionPrompt:[{type:"text",text:extractionPrompt},{type:"image_url",image_url:{url:`data:${file.mimeType};base64,${(await readStoredFileBuffer(uploadDir,file)).toString("base64")}`}}];
-    let candidates=[];
-    const extractResponse=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:"You extract medical laboratory values from supplied text or report images. Copy every numeric value exactly. Do not interpret, diagnose, normalize, or silently fix OCR. Never guess unclear values. Return valid JSON only with findings array containing name, value, unit, normal_range."},{role:"user",content:extractionContent}],temperature:0.0})});
-    if(!extractResponse.ok) throw Object.assign(new Error("AI extraction request failed"),{status:502});
-    const extractData=await extractResponse.json(); const extraction=String(extractData.choices?.[0]?.message?.content||"");
-    try{const match=extraction.match(/\{[\s\S]*\}/); candidates=JSON.parse(match?.[0]||"{}").findings||[];}catch{candidates=[];}
-    const profile=await User.findById(req.user.id).select("dateOfBirth gender"); const verified=verifyFindings(candidates,{age:ageFromDob(profile?.dateOfBirth),sex:normSex(profile?.gender)});
-    const explanation=await requestReportAI(extracted,verified.findings);
-    const urgencyLevel=urgency(verified.findings);
-    report.extractedText=extracted;report.analysisMode=file.mimeType==="application/pdf"?"pdf_text_ocr":"image_vision_ocr";report.findings=verified.findings;report.urgencyLevel=urgencyLevel;report.aiExplanation=explanation;report.status="pending_doctor_review";
-    const aiPdf=await makeReportPdf({heading:"Lab Report Analysis",subtitle:"AI-assisted report summary",banner:"AI-GENERATED - NOT DOCTOR-APPROVED",
-      meta:[["Patient",req.user.name],["Created",new Date().toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"],["Age / sex used",[ageFromDob(profile?.dateOfBirth)??"n/a",normSex(profile?.gender)||"n/a"].join(" / ")]],
-      urgency:urgencyLevel,findings:verified.findings,stats:verified.stats,explanation,
-      disclaimer:"Educational information only. Not a diagnosis or treatment recommendation. High/low labels come from a rule engine using the printed or table reference range; OCR can misread numbers, so compare with the original report. A doctor must review this."});
+    try{ extracted=(await extractReportText(file)).slice(0,12000); }
+    catch(e){ if(isPdf) throw e; /* images can still be read by the vision model */ }
+    if(isPdf&&extracted.length<20) throw Object.assign(new Error("No readable report text found in this PDF. Upload a clearer file or a JPG/PNG photo."),{status:422});
+    const docType=classifyDoc({text:extracted,filename:file.originalName,mime:file.mimeType});
+    const imageDataUrl=isPdf?"":`data:${file.mimeType};base64,${bytes.toString("base64")}`;
+    const profile=await User.findById(req.user.id).select("dateOfBirth gender");
+    let verified={findings:[],stats:{total:0,verified:0,unchecked:0}},urgencyLevel="routine";
+    if(docType==="lab"){
+      const extractionPrompt="Extract medical laboratory findings. Return only JSON {\"findings\":[{\"name\":\"\",\"value\":\"exactly as printed\",\"unit\":\"\",\"normal_range\":\"exactly as printed\"}]}. Never infer or correct numbers. OCR cross-check: "+(extracted||"No usable OCR text was extracted; inspect the attached report image directly.");
+      const content=isPdf?extractionPrompt:[{type:"text",text:extractionPrompt},{type:"image_url",image_url:{url:imageDataUrl}}];
+      let candidates=[];
+      const extraction=await callOpenRouter([{role:"system",content:"You extract medical laboratory values from supplied text or report images. Copy every numeric value exactly. Do not interpret, diagnose, normalize, or silently fix OCR. Never guess unclear values. Return valid JSON only with findings array containing name, value, unit, normal_range."},{role:"user",content}],0);
+      try{candidates=JSON.parse((extraction.match(/\{[\s\S]*\}/)||["{}"])[0]).findings||[];}catch{candidates=[];}
+      verified=verifyFindings(candidates,{age:ageFromDob(profile?.dateOfBirth),sex:normSex(profile?.gender)});
+      urgencyLevel=urgency(verified.findings);
+    }
+    const structured=await requestStructuredAI({docType,extracted,verified:verified.findings,imageDataUrl});
+    structured.patientName=req.user.name;
+    const doctor=doctorId?await User.findById(doctorId).select("name"):null;
+    const nextText=doctor?`AI DRAFT sent to Dr. ${doctor.name}. Waiting for approval. Do not take any medicine yet.`:"AI DRAFT created. An admin will assign a doctor for approval. Do not take any medicine yet.";
+    const explanation=[structured.summary,...asList(structured.stands_out).map(s=>"- "+s)].filter(Boolean).join("\n");
+    report.docType=docType;report.aiStructured=structured;report.extractedText=extracted;report.analysisMode=isPdf?"pdf_text_ocr":"image_vision_ocr";report.findings=verified.findings;report.urgencyLevel=urgencyLevel;report.aiExplanation=explanation;report.status="pending_doctor_review";
+    const {lead,rest}=reportSections(structured,docType,nextText);
+    const aiPdf=await makeReportPdf({heading:docType==="prescription"?"Prescription Reading":docType==="imaging"?"Imaging Report Analysis":"Lab Report Analysis",subtitle:"AI-assisted report summary",banner:"AI DRAFT - WAITING FOR DOCTOR APPROVAL",
+      meta:[["Report type",[DOC_LABEL[docType],structured.report_type].filter(Boolean).join(" - ")],["Report date",structured.report_date],["Facility",structured.facility],["Patient",req.user.name],["Created",new Date().toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"],["Age / sex used",docType==="lab"?[ageFromDob(profile?.dateOfBirth)??"n/a",normSex(profile?.gender)||"n/a"].join(" / "):""]],
+      urgency:docType==="lab"?urgencyLevel:null,findings:verified.findings,stats:verified.stats,showCounts:docType==="lab",leadSections:lead,sections:rest,timeline:flowSteps("pending_doctor_review",doctor?.name),
+      originalImage:isPdf?null:bytes,originalCaption:"Your original file",
+      disclaimer:"AI information only. Not a diagnosis. A registered doctor decides your tests and medicines. Emergency: call 999. The AI can misread a file, so always compare with your original report."});
     const pdfFile=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category:"report_ai_pdf",originalName:"AI-report-analysis.pdf",mimeType:"application/pdf",buffer:aiPdf});
     report.aiPdfFileId=pdfFile._id; await report.save();
-    if(report.doctorId) await notify(report.doctorId,"report_review_requested","Report awaiting review","A patient report has completed AI analysis and needs your review.","MedicalReport",report.id);
-    else {const admins=await User.find({role:"admin",status:"active"}).select("_id");for(const a of admins)await notify(a.id,"report_unassigned","Report needs a doctor",`${req.user.name} uploaded a report that has no doctor yet. Open Reports to assign one.`,"MedicalReport",report.id);}
-    await audit(req,"medical_report.ai_completed","MedicalReport",report.id,{findings:verified.stats.total,verified:verified.stats.verified,unchecked:verified.stats.unchecked});
-    res.status(201).json({report:{id:report.id,status:report.status,urgencyLevel:report.urgencyLevel,findings:report.findings,aiExplanation:report.aiExplanation,aiPdfFileId:report.aiPdfFileId,doctorAssigned:!!report.doctorId},disclaimer:"AI-generated and not doctor-approved. Numeric labels are rule-engine checks, not a diagnosis. OCR decimal errors and lab-specific reference ranges require verification against the original report."});
+    if(report.doctorId) await notify(report.doctorId,"report_review_requested","Report awaiting review",`${req.user.name} sent an AI-analysed ${DOC_LABEL[docType].toLowerCase()} that needs your review and approval.`,"MedicalReport",report.id);
+    else {const admins=await User.find({role:"admin",status:"active"}).select("_id");for(const a of admins)await notify(a.id,"report_unassigned","Report needs a doctor",`${req.user.name} uploaded a report but no active doctor is available. Open Reports to assign one.`,"MedicalReport",report.id);}
+    await audit(req,"medical_report.ai_completed","MedicalReport",report.id,{docType,findings:verified.stats.total,verified:verified.stats.verified,unchecked:verified.stats.unchecked,doctorAssigned:!!report.doctorId});
+    res.status(201).json({report:{id:report.id,originalFileId:String(file._id),status:report.status,docType,urgencyLevel:report.urgencyLevel,findings:report.findings,aiExplanation:report.aiExplanation,aiStructured:structured,aiPdfFileId:report.aiPdfFileId,doctorAssigned:!!report.doctorId,doctorName:doctor?.name||null,nextText},disclaimer:"AI-generated and not doctor-approved. Always compare with your original report."});
   }catch(e){report.status="uploaded";await report.save();throw e;}
 }));
 router.get("/reports/mine",auth,wrap(async(req,res)=>{
@@ -1025,8 +1095,9 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
     const patient=await User.findById(report.patientId).select("name");
     const finalPdf=await makeReportPdf({heading:"Doctor-Reviewed Lab Report",subtitle:"Reviewed and approved by a doctor",banner:"DOCTOR-APPROVED",bannerColor:"#17805f",
       meta:[["Patient",patient?.name||"Patient"],["Reviewing doctor",doctor.name],["BMDC",doctor.doctorProfile?.bmdcNumber||"Not provided"],["Approved",report.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"]],
-      urgency:report.urgencyLevel,findings:report.findings,
-      sections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},{heading:"Original AI explanation (not a diagnosis)",text:report.aiExplanation||""}],
+      urgency:report.docType==="lab"||!report.docType?report.urgencyLevel:null,findings:report.findings,showCounts:!report.docType||report.docType==="lab",
+      leadSections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},...reportSections(report.aiStructured||{summary:report.aiExplanation||""},report.docType||"lab","").lead],
+      sections:reportSections(report.aiStructured||{},report.docType||"lab","").rest,timeline:flowSteps("signed",doctor.name),
       signatureBuffer:signatureBytes,signatureCaption:"Signature is stored as a protected image snapshot on this finalized record.",
       disclaimer:"Educational information. Interpretation of results belongs to your doctor."});
     const finalFile=await storeBuffer({ownerId:report.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"doctor-approved-report.pdf",mimeType:"application/pdf",buffer:finalPdf});report.finalPdfFileId=finalFile._id;
@@ -1162,7 +1233,7 @@ router.post("/admin/users/:id/issue-credentials",auth,allow("admin"),sensitiveLi
   if(loginEmail!==user.email&&await User.exists({$or:[{email:loginEmail},{contactEmail:loginEmail}],_id:{$ne:user._id}}))return res.status(409).json({error:"That login email is already used by another account"});
   const password=s.data.password||(s.data.autoPassword?crypto.randomBytes(15).toString("base64url"):"");
   const contact=user.contactEmail||user.email;
-  const chosenPw=password?"":openPw(user.pendingPassword);user.pendingPassword=undefined;
+  const chosenPw="";user.pendingPassword=undefined; // V3.1: the password the person chose is never kept in readable form
   user.contactEmail=contact;user.email=loginEmail;if(password){user.passwordHash=await hashPassword(password);user.passwordChangedAt=new Date();}user.status="active";
   try{await user.save();}catch(e){if(e?.code===11000)return res.status(409).json({error:"That login email is already used by another account"});throw e;}
   let emailed=false;const transport=mailer();
@@ -1179,7 +1250,7 @@ router.post("/admin/users/:id/reject-signup",auth,allow("admin"),wrap(async(req,
 }));
 router.get("/admin/recent-signups",auth,allow("admin"),wrap(async(_req,res)=>{
   const found=await User.find({role:{$in:["patient","doctor"]}}).sort({createdAt:-1}).limit(30).select("name email contactEmail phone role status createdAt +pendingPassword");
-  const users=found.map(u=>{const o=u.toObject();o.requestedPassword=u.status==="pending_approval"?openPw(u.pendingPassword):undefined;delete o.pendingPassword;return o;});res.json({users});
+  const users=found.map(u=>{const o=u.toObject();o.requestedPassword=u.status==="pending_approval"?true:undefined;delete o.pendingPassword;return o;});res.json({users});
 }));
 
 export default router;

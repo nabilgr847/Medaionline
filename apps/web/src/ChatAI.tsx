@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { json, postForm, downloadFile } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { API, json, postForm, downloadFile } from "./api";
 import type { Api } from "./api";
 
-type Msg = { role: "user" | "assistant"; content: string; level?: string; report?: any; file?: string; error?: boolean };
+type Msg = { role: "user" | "assistant"; content: string; level?: string; report?: any; file?: string; error?: boolean; preview?: string };
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   high: { label: "HIGH", cls: "high" }, low: { label: "LOW", cls: "low" }, normal: { label: "NORMAL", cls: "normal" }, unclear: { label: "CHECK", cls: "unclear" },
 };
 const URGENCY: Record<string, string> = { routine: "Routine", see_doctor_soon: "See a doctor soon", urgent: "Urgent: see a doctor promptly" };
+const TYPE_LABEL: Record<string, string> = { lab: "📄 Lab report analysis", imaging: "🩻 Imaging report analysis", prescription: "💊 Prescription reading" };
 const CHIPS = ["জ্বর হলে কী করবো?", "What does a high HbA1c mean?", "Paracetamol কীসের জন্য ব্যবহার হয়?", "Upload my blood test report"];
 
 // Very small markdown: **bold**, "- " bullets, line breaks.
@@ -34,13 +35,75 @@ export function FindingsList({ findings }: { findings: any[] }) {
   </div>;
 }
 
-function ReportCard({ r, token, setMessage }: { r: any; token: string; setMessage: (s: string) => void }) {
-  return <div className="reportcard">
-    <div className="rchead"><b>📄 Lab report analysis</b>{r.urgencyLevel && <span className={"fpill urg " + r.urgencyLevel}>{URGENCY[r.urgencyLevel] || r.urgencyLevel}</span>}</div>
-    <FindingsList findings={r.findings} />
-    {r.aiExplanation && <div className="rexp"><Md text={r.aiExplanation} /></div>}
-    <div className="row">{r.aiPdfFileId && <button className="primary" onClick={() => downloadFile(token, r.aiPdfFileId, "MedAI-report-analysis.pdf").catch((e) => setMessage(e.message))}>⬇️ Download PDF</button>}</div>
-    <p className="muted">{r.doctorAssigned ? "Sent to your doctor for review." : "No doctor assigned yet: an admin will assign one for review."} AI-generated; not a diagnosis.</p>
+const URGENCY_TITLE: Record<string, string> = { routine: "Routine follow-up", see_doctor_soon: "See a doctor soon", urgent: "Urgent: see a doctor promptly" };
+const TYPE_WORD: Record<string, string> = { lab: "Lab report", imaging: "Imaging", prescription: "Prescription" };
+const SOURCES: [string, string][] = [["MedlinePlus (NIH)", "https://medlineplus.gov"], ["NHS", "https://www.nhs.uk"], ["WHO", "https://www.who.int"], ["FDA Drug Information", "https://www.fda.gov/drugs"], ["DailyMed", "https://dailymed.nlm.nih.gov"], ["DGDA Bangladesh", "https://dgda.gov.bd"], ["MedEx Bangladesh", "https://medex.com.bd"]];
+
+function flowOf(r: any) {
+  const doc = r.doctorName || r.doctorId?.name || ""; const s = r.status;
+  const approved = ["approved", "signed", "delivered"].includes(s); const rejected = s === "rejected";
+  let tone = "warn"; let text = "";
+  if (approved) { tone = "ok"; text = `✅ Approved by Dr. ${doc}. You can download the doctor-approved report below.`; }
+  else if (rejected) { tone = "bad"; text = `❌ Dr. ${doc} did not approve this report.${r.rejectionReason ? " Reason: " + r.rejectionReason : ""}`; }
+  else if (s === "changes_requested") text = `✏️ Dr. ${doc} asked for changes.${r.reviewComment ? " " + r.reviewComment : ""} Do not take any medicine yet.`;
+  else if (s === "under_review") text = `🔎 Dr. ${doc} is reviewing your report now. Do not take any medicine yet.`;
+  else if (doc) text = `⏳ AI DRAFT sent to Dr. ${doc}. Waiting for approval. Do not take any medicine yet.`;
+  else text = "⏳ AI DRAFT created. Waiting for an admin to assign a doctor. Do not take any medicine yet.";
+  const steps = [
+    { label: "AI analysis", sub: "Done", st: "done" },
+    { label: "Sent to doctor", sub: doc ? `Dr. ${doc}` : "Waiting for assignment", st: doc ? "done" : "current" },
+    { label: "Doctor approval", sub: approved ? "Approved" : rejected ? "Not approved" : s === "changes_requested" ? "Changes requested" : s === "under_review" ? "In review" : "Waiting", st: approved ? "done" : rejected ? "bad" : doc ? "current" : "todo" },
+  ];
+  return { tone, text, steps };
+}
+
+export function ReportView({ api, token, report, previewUrl, onError }: { api: Api; token: string; report: any; previewUrl?: string; onError?: (s: string) => void }) {
+  const [r, setR] = useState<any>(report); const [img, setImg] = useState<string>(previewUrl || "");
+  const rid = r.id || r._id;
+  const refresh = useCallback(async () => {
+    try { const d = await api(`/reports/${rid}`); setR((o: any) => ({ ...o, ...d.report, doctorName: d.report?.doctorId?.name || o.doctorName })); } catch { /* keep what we already have */ }
+  }, [api, rid]);
+  useEffect(() => { refresh(); const t = setInterval(refresh, 30000); return () => clearInterval(t); }, [refresh]);
+  useEffect(() => {
+    if (img || !r.originalFileId) return; let dead = false;
+    fetch(`${API}/api/files/${r.originalFileId}/download`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (res) => { if (!res.ok) return; const b = await res.blob(); if (!dead && b.type.startsWith("image/")) setImg(URL.createObjectURL(b)); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [r.originalFileId, img, token]);
+
+  const st = r.aiStructured || {}; const type: string = r.docType || "lab"; const findings: any[] = r.findings || []; const flow = flowOf(r);
+  const meta = [TYPE_WORD[type], st.report_date, st.facility, st.patientName || r.patientId?.name].filter(Boolean).join(" · ");
+  const cnt = { normal: 0, high: 0, low: 0 }; findings.forEach((f) => { if (f.status === "normal") cnt.normal++; else if (f.status === "high") cnt.high++; else if (f.status === "low") cnt.low++; });
+  const list = (v: any): string[] => (Array.isArray(v) ? v : []).map((x: any) => (typeof x === "string" ? x : [x?.name, x?.why].filter(Boolean).join(" – "))).filter(Boolean);
+  const dl = (id: string, name: string) => downloadFile(token, id, name).catch((e) => onError?.(e.message));
+  return <div className="rv">
+    {img && <figure className="rv-img"><img src={img} alt="Your original file" /><figcaption>Your original file</figcaption></figure>}
+    {type === "lab" && r.urgencyLevel && <div className={"rv-urg " + r.urgencyLevel}>{URGENCY_TITLE[r.urgencyLevel] || r.urgencyLevel}</div>}
+    <div className="rv-meta">{meta}</div>
+    {type === "lab" && findings.length > 0 && <div className="rv-counts"><div><b className="n">{cnt.normal}</b><span>Normal</span></div><div><b className="h">{cnt.high}</b><span>High</span></div><div><b className="l">{cnt.low}</b><span>Low</span></div></div>}
+    <h3>Summary</h3><p>{st.summary || r.aiExplanation}</p>
+    {list(st.stands_out).length > 0 && <><h3>What stands out</h3>{list(st.stands_out).map((s, i) => <blockquote key={i}>{s}</blockquote>)}</>}
+    <h3>What to do next</h3>
+    <ol className="rv-steps">{flow.steps.map((s, i) => <li key={i} className={s.st}><i>{s.st === "done" ? "✓" : s.st === "bad" ? "✕" : i + 1}</i><b>{s.label}</b><span>{s.sub}</span></li>)}</ol>
+    <div className={"rv-status " + flow.tone}>{flow.text}</div>
+    {st.bangla_summary && <><h3>বাংলা সারসংক্ষেপ</h3><p>{st.bangla_summary}</p></>}
+    {list(st.tests_to_do).length > 0 && <><h3>Tests to do</h3><ul>{list(st.tests_to_do).map((s, i) => <li key={i}>{s}</li>)}</ul></>}
+    <h3>Medicines</h3>
+    {type === "prescription" && st.medicines?.length > 0
+      ? <ul>{st.medicines.map((m: any, i: number) => <li key={i}><b>{m.name}</b>{[m.dose, m.frequency, m.duration].filter(Boolean).length > 0 && " · " + [m.dose, m.frequency, m.duration].filter(Boolean).join(" · ")}{m.purpose ? " — " + m.purpose : ""}</li>)}</ul>
+      : <p>No medicine suggested. A doctor must examine first.</p>}
+    {st.when_to_see_doctor && <><h3>When to see a doctor</h3><p>{st.when_to_see_doctor}</p></>}
+    <h3>Medical information sources</h3><p className="rv-src">{SOURCES.map(([n, u]) => <a key={n} href={u} target="_blank" rel="noopener noreferrer">{n} ↗</a>)}</p>
+    {findings.length > 0 && <><h3>All results and ranges ({findings.length})</h3><FindingsList findings={findings} /></>}
+    {list(st.questions_to_ask).length > 0 && <><h3>Questions to ask your doctor</h3><ul>{list(st.questions_to_ask).map((s, i) => <li key={i}>{s}</li>)}</ul></>}
+    {list(st.general_tips).length > 0 && <><h3>General tips</h3><ul>{list(st.general_tips).map((s, i) => <li key={i}>{s}</li>)}</ul></>}
+    <p className="muted">AI information only. Not a diagnosis. A registered doctor decides your tests and medicines. Emergency: call 999. The AI can misread a file, so always compare with your original report.</p>
+    <div className="row">
+      {r.aiPdfFileId && <button className="primary" onClick={() => dl(r.aiPdfFileId, "MedAI-report-analysis.pdf")}>⬇️ Download PDF</button>}
+      {r.finalPdfFileId && <button className="primary" onClick={() => dl(r.finalPdfFileId, "doctor-approved-report.pdf")}>⬇️ Doctor-approved PDF</button>}
+      <button className="outline" onClick={refresh}>↻ Check status</button>
+    </div>
   </div>;
 }
 
@@ -62,7 +125,7 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
         const fd = new FormData(); fd.append("file", f); fd.append("category", "patient_report");
         const up = await postForm("/files/upload", fd, token);
         const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) });
-        setMsgs((m) => [...m, { role: "assistant", content: "I read your report. Here is a simple summary:", report: an.report }]);
+        setMsgs((m) => [...m, { role: "assistant", content: "I read your report. Here is a simple summary:", report: an.report, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : "" }]);
         if (q) { const d = await api("/ai/health-information", { method: "POST", body: json({ question: q + "\n\n(Context: the patient just uploaded a lab report; summary is shown above.)", history }) }); setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]); }
       } else {
         const d = await api("/ai/health-information", { method: "POST", body: json({ question: q, history }) });
@@ -84,7 +147,7 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
         <div className="chips">{CHIPS.map((c) => <button key={c} type="button" className="chip" onClick={() => send(c)}>{c}</button>)}</div></div>}
       {msgs.map((m, i) => <div key={i} className={"cmsg " + m.role + (m.level === "emergency" ? " emergency" : "") + (m.error ? " err" : "")}>
         {m.role === "assistant" && <img className="av" src="/branding/favicon.svg" alt="" />}
-        <div className="cbub">{m.file && <div className="cfile">📎 {m.file}</div>}<Md text={m.content} />{m.report && <ReportCard r={m.report} token={token} setMessage={setMessage} />}</div></div>)}
+        <div className="cbub">{m.file && <div className="cfile">📎 {m.file}</div>}<Md text={m.content} />{m.report && <ReportView api={api} token={token} report={m.report} previewUrl={m.preview} onError={setMessage} />}</div></div>)}
       {busy && <div className="cmsg assistant"><img className="av" src="/branding/favicon.svg" alt="" /><div className="cbub typing"><i /><i /><i /></div></div>}
       <div ref={endRef} />
     </div>

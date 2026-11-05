@@ -6,6 +6,7 @@ const BLUE="#087fbd",TEAL="#20a58a",NAVY="#102e49",MUTED="#60788d";
 const FONT_DIR=new URL("../assets/fonts/",import.meta.url);
 const bnRegular=new URL("NotoSansBengali-Regular.ttf",FONT_DIR),bnBold=new URL("NotoSansBengali-Bold.ttf",FONT_DIR);
 const HAS_BN=fs.existsSync(bnRegular);
+export const PDF_HAS_BANGLA=HAS_BN;
 const BN_RE=/[\u0980-\u09FF]/;
 
 // ---- text helpers: Latin text uses Helvetica, Bangla runs use Noto Sans Bengali when installed ----
@@ -17,7 +18,7 @@ function segs(t){
     if(c!==bn){out.push([cur,bn]);cur="";bn=c;} cur+=ch;
   } if(cur)out.push([cur,bn]); return out;
 }
-const latin=s=>String(s??"").replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/[\u2013\u2014]/g,"-").replace(/[^\x09\x0A\x20-\x7E\u00A0-\u00FF]/g,"?");
+const latin=s=>String(s??"").replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/[\u2013\u2014]/g,"-").replace(/[^\x09\x0A\x20-\x7E\u00A0-\u00FF\u2022]/g,"?");
 // Writes text (optionally at x,y). base: "Helvetica" | "Helvetica-Bold".
 function put(doc,text,x,y,opts={},base="Helvetica"){
   const t=String(text??"");
@@ -115,18 +116,61 @@ function signature(doc,buf,label,caption){
 }
 
 /** Structured lab-report PDF (AI analysis and doctor-approved versions). */
-export function makeReportPdf({heading,subtitle,banner,bannerColor="#b26a00",meta=[],urgency,findings=[],stats,explanation,sections=[],signatureBuffer,signatureCaption,disclaimer,footerNote}){
+const ACCENT={"Summary":BLUE,"What stands out":TEAL,"What to do next":"#b26a00","Doctor review":"#17805f","Bangla summary":"#6b5bd6","Tests to do":"#6b5bd6","When to see a doctor":"#c0392b"};
+const FILL={"What to do next":"#fff6e0","Doctor review":"#eaf7f1","When to see a doctor":"#fdf0ee"};
+/** Section card: soft background, coloured accent bar, heading, bullet lines. */
+function card(doc,heading,text){
+  const accent=ACCENT[heading]||BLUE,fill=FILL[heading]||"#f6f9fc",W=455;
+  const paras=String(text||"").split(/\n+/).map(p=>p.trim()).filter(Boolean).map(p=>p.replace(/^-\s+/,"\u2022 "));
+  if(!paras.length)return;
+  let h=38;for(const p of paras)h+=height(doc,p,W,9.5)+5;
+  ensure(doc,h+6);const y=doc.y;
+  doc.roundedRect(48,y,499,h,9).fill(fill);doc.roundedRect(48,y,5,h,2.5).fill(accent);
+  doc.fillColor(accent).fontSize(11);put(doc,heading,66,y+11,{width:W,lineBreak:false},"Helvetica-Bold");
+  let cy=y+31;doc.fillColor(NAVY).fontSize(9.5);
+  for(const p of paras){put(doc,p,66,cy,{width:W,lineGap:2},"Helvetica");cy+=height(doc,p,W,9.5)+5;}
+  doc.y=y+h+9;doc.x=48;doc.fillColor(NAVY);
+}
+/** Three-step approval tracker: AI analysis -> sent to doctor -> doctor approval. */
+function timelineBlock(doc,steps){
+  if(!steps||!steps.length)return;ensure(doc,76);const y=doc.y,n=steps.length,colW=499/n;
+  doc.roundedRect(48,y,499,64,10).fill("#f6f9fc");
+  const col={done:TEAL,current:"#d98a00",todo:"#b8c4cf",bad:"#c0392b"};
+  steps.forEach((s,i)=>{const cx=48+colW*i+colW/2;
+    if(i<n-1)doc.moveTo(cx+11,y+17).lineTo(cx+colW-11,y+17).lineWidth(2).strokeColor(s.state==="done"?TEAL:"#d5dee6").stroke();
+    doc.circle(cx,y+17,9).fill(col[s.state]||col.todo);
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8).text(s.state==="done"?"OK":s.state==="bad"?"X":String(i+1),cx-9,y+13.5,{width:18,align:"center",lineBreak:false});
+    doc.fillColor(NAVY).font("Helvetica-Bold").fontSize(9).text(latin(s.label),cx-colW/2+4,y+33,{width:colW-8,align:"center",lineBreak:false});
+    doc.fillColor(MUTED).font("Helvetica").fontSize(8).text(latin(s.sub||""),cx-colW/2+4,y+46,{width:colW-8,align:"center",lineBreak:false,ellipsis:true});
+  });
+  doc.y=y+76;doc.x=48;doc.fillColor(NAVY);
+}
+/** Original file thumbnail on the left, report details on the right. */
+function topCard(doc,img,pairs){
+  const rows=pairs.filter(p=>p&&p[1]);if(!rows.length&&!img)return;
+  const mh=rows.length*17+18;ensure(doc,Math.max(mh,img?172:0)+8);const y=doc.y;let x=48,w=499,shown=false;
+  if(img){try{doc.roundedRect(48,y,150,150,10).lineWidth(1).strokeColor("#d5dee6").stroke();doc.image(img,53,y+5,{fit:[140,140],align:"center",valign:"center"});shown=true;}catch{shown=false;}
+    if(shown){doc.fillColor(MUTED).font("Helvetica").fontSize(8).text("Your original file",48,y+155,{width:150,align:"center",lineBreak:false});x=212;w=335;}}
+  const ch=Math.max(mh,shown?150:0);
+  doc.roundedRect(x,y,w,ch,10).fill("#f4f8fb");
+  rows.forEach(([k,v],i)=>{doc.fillColor(MUTED).font("Helvetica").fontSize(8.5).text(latin(k),x+12,y+10+i*17,{width:92,lineBreak:false});doc.fillColor(NAVY);put(doc,v,x+106,y+10+i*17,{width:w-118,lineBreak:false,height:13,ellipsis:true},"Helvetica-Bold");});
+  doc.y=y+Math.max(ch,shown?170:0)+10;doc.x=48;doc.fillColor(NAVY);
+}
+export function makeReportPdf({heading,subtitle,banner,bannerColor="#b26a00",meta=[],urgency,findings=[],stats,explanation,sections=[],leadSections=[],originalImage,showCounts=true,timeline=[],signatureBuffer,signatureCaption,disclaimer,footerNote}){
   const doc=newDoc(heading,subtitle);
-  doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY);put(doc,heading,48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.5);
+  doc.font("Helvetica-Bold").fontSize(21).fillColor(NAVY);put(doc,heading,48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.4);
   if(banner)badge(doc,banner,bannerColor);
-  metaGrid(doc,[...meta,urgency?["Review priority (rule-based)",URGENCY_LABEL[urgency]||urgency]:null]);
-  if(findings.length){h2(doc,"Results at a glance");summaryStrip(doc,findings);h2(doc,"Detailed results");resultsTable(doc,findings);
+  topCard(doc,originalImage,[...meta,urgency?["Review priority",URGENCY_LABEL[urgency]||urgency]:null]);
+  timelineBlock(doc,timeline);
+  if(findings.length&&showCounts)summaryStrip(doc,findings);
+  for(const s of leadSections)card(doc,s.heading,s.text);
+  if(explanation&&!leadSections.length)card(doc,"Plain-language explanation",explanation);
+  for(const s of sections)card(doc,s.heading,s.text);
+  if(findings.length){h2(doc,"All results and ranges");resultsTable(doc,findings);
     if(stats&&(stats.unchecked||stats.ocrSuspect||stats.conflicts))para(doc,`${stats.unchecked} value(s) could not be auto-verified${stats.ocrSuspect?`, ${stats.ocrSuspect} possible OCR misread`:""}${stats.conflicts?`, ${stats.conflicts} range conflict(s)`:""}. Please compare these with the original report.`,8.5,MUTED);}
-  else para(doc,"No laboratory values could be read from this report.",9.5,MUTED);
-  if(explanation){h2(doc,"Plain-language explanation");para(doc,explanation);}
-  for(const s of sections){h2(doc,s.heading);para(doc,s.text);}
+  else if(showCounts)para(doc,"No laboratory values could be read from this report.",9.5,MUTED);
   if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature",signatureCaption);
-  if(disclaimer){doc.moveDown(0.6);ensure(doc,50);const y=doc.y,h=height(doc,disclaimer,475,8)+14;doc.roundedRect(48,y,499,h,8).fill("#fff6e0");doc.fillColor("#7a4b00").fontSize(8);put(doc,disclaimer,60,y+7,{width:475});}
+  if(disclaimer){doc.moveDown(0.4);ensure(doc,50);const y=doc.y,h=height(doc,disclaimer,475,8)+14;doc.roundedRect(48,y,499,h,8).fill("#fff6e0");doc.fillColor("#7a4b00").fontSize(8);put(doc,disclaimer,60,y+7,{width:475});}
   return finish(doc,footerNote);
 }
 

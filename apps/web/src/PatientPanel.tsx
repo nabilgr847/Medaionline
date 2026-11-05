@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDate, fmtDay, fmtSize, label, listFromText } from "./api";
-import ChatAI, { FindingsList } from "./ChatAI";
+import ChatAI, { FindingsList, ReportView } from "./ChatAI";
 import { useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
 import TeleVisitCall from "./TeleVisitCall";
@@ -72,6 +72,7 @@ function PatientNotifications({api,setMessage}:{api:Api;setMessage:(s:string)=>v
 }
 
 function Reports({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
+  const [openRid, setOpenRid] = useState("");
   const [files, setFiles] = useState<any[]>([]); const [reports, setReports] = useState<any[]>([]); const [file, setFile] = useState<File | null>(null); const [busy, setBusy] = useState(false); const [reportText, setReportText] = useState(""); const [reportAnalysis, setReportAnalysis] = useState("");
   async function load() { try { const d = await api("/files/mine"); setFiles((d.files || []).filter((f: any) => f.category === "patient_report")); const r=await api("/reports/mine");setReports(r.reports||[]); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
@@ -89,7 +90,7 @@ function Reports({ api, token, setMessage }: { api: Api; token: string; setMessa
     <article className="full"><h3>Explain report text with AI</h3><p className="muted">PDF text extraction/scanned-page OCR is used for PDFs. Report images are sent to the configured vision-capable AI model and cross-checked with Bangla/English OCR. OCR/vision may misread numbers; verify every value against the original. Text analysis is also available below.</p><textarea rows={5} value={reportText} onChange={e => setReportText(e.target.value)} placeholder="Paste test name, result, unit and reference range…" /><button className="primary" disabled={busy || reportText.trim().length < 20} onClick={analyzeReport}>{busy ? "Analyzing…" : "Explain report text"}</button>{reportAnalysis && <pre className="answer">{reportAnalysis}</pre>}</article>
     <article><h3>My reports</h3>{files.length === 0 && reports.length===0 && <p className="muted">No reports uploaded.</p>}
       {files.map((f) => <div className="item" key={f._id}><b>{f.originalName}</b><p className="muted">{fmtDay(f.createdAt)} · {fmtSize(f.size)}</p><div className="row"><button className="outline" onClick={() => downloadFile(token, f._id, f.originalName).catch((e) => setMessage(e.message))}>⬇️ Download original</button><button className="danger" onClick={() => remove(f._id)}>Delete</button></div></div>)}
-      {reports.map((r:any)=><div className="item" key={r._id}><b>AI report review · {label(r.status)}</b><p className="muted">{fmtDay(r.createdAt)} · {r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p><FindingsList findings={r.findings} />{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)}</article>
+      {reports.map((r:any)=><div className="item" key={r._id}><b>AI report review · {label(r.status)}</b><p className="muted">{fmtDay(r.createdAt)} · {r.doctorId?.name?`Dr. ${r.doctorId.name}`:"Waiting for doctor assignment"}</p>{openRid !== r._id && <FindingsList findings={r.findings} />}<div className="row"><button className="outline" onClick={() => setOpenRid(openRid === r._id ? "" : r._id)}>{openRid === r._id ? "Hide analysis" : "View analysis"}</button></div>{openRid === r._id && <ReportView api={api} token={token} report={{ ...r, doctorName: r.doctorId?.name }} onError={setMessage} />}{r.rejectionReason&&<p className="warn">Reason: {r.rejectionReason}</p>}{r.reviewComment&&<p>{r.reviewComment}</p>}<div className="row">{r.aiPdfFileId&&<button className="outline" onClick={()=>downloadFile(token,r.aiPdfFileId,"ai-report.pdf").catch((e)=>setMessage(e.message))}>Download AI PDF</button>}{r.finalPdfFileId&&<button className="primary" onClick={()=>downloadFile(token,r.finalPdfFileId,"doctor-approved-report.pdf").catch((e)=>setMessage(e.message))}>Download approved PDF</button>}</div></div>)}</article>
   </div>;
 }
 
