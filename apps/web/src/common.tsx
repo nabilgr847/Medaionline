@@ -109,7 +109,7 @@ export function ChangePassword({ api, onToken, setMessage }: { api: Api; onToken
     <button className="primary">Update password</button></form></article>;
 }
 
-const NOTE_ICON: Record<string, string> = { missed: "📵", message: "💬", prescription: "💊", report: "📄", appointment: "📅", account: "👤", call: "📞", message: "💬", missed: "📵" };
+const NOTE_ICON: Record<string, string> = { missed: "📵", message: "💬", prescription: "💊", report: "📄", appointment: "📅", account: "👤", call: "📞" };
 const noteIcon = (t: string) => { const k = Object.keys(NOTE_ICON).find((x) => (t || "").includes(x)); return k ? NOTE_ICON[k] : "🔔"; };
 
 // One notification list for patient and doctor. Unread items get a red dot and a tinted card; read items are plain.
