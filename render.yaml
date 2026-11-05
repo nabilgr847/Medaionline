@@ -46,6 +46,10 @@ services:
         sync: false
       - key: TURN_SHARED_SECRET
         sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false
       - key: REQUIRE_ADMIN_APPROVAL
         value: "false"
       - key: PRESCRIPTION_SIGNING_PRIVATE_KEY_BASE64

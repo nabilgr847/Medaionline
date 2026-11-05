@@ -21,7 +21,11 @@ app.set("trust proxy",1); // Render/other reverse proxies: use the real client I
 app.use(helmet());
 app.use(cors({origin:config.clientOrigin}));
 app.use(express.json({limit:"10mb"}));
-app.use(rateLimit({windowMs:15*60*1000,limit:180,standardHeaders:true,legacyHeaders:false}));
+// Global limiter. Must answer in JSON (the web app parses it), and must not count the guest-room / heartbeat
+// polling requests: those fire every 1-3 seconds and would otherwise exhaust the IP's budget within minutes,
+// making every other page (dashboard, AI chat, report upload) fail with "Request failed".
+const POLLING_PATH=/^\/api\/(temporary-consults\/[^/]+\/room\/|presence\/heartbeat|appointments\/[^/]+\/call-heartbeat)/;
+app.use(rateLimit({windowMs:15*60*1000,limit:600,standardHeaders:true,legacyHeaders:false,skip:req=>POLLING_PATH.test(req.originalUrl.split("?")[0]),message:{error:"Too many requests. Please wait a minute and try again."}}));
 app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"MedAI Hospital API"}));
 app.use("/api",routes);
 app.use((err,req,res,_next)=>{
@@ -52,4 +56,6 @@ async function start(){
   console.log(`Private upload storage configured at ${config.uploadDir}`);
   app.listen(config.port,()=>console.log(`MedAI Hospital API listening on ${config.port}`));
 }
+process.on("unhandledRejection",r=>console.error("Unhandled rejection:",r instanceof Error?r.message:r));
+process.on("SIGTERM",()=>{console.log("SIGTERM received, shutting down");mongoose.connection.close().finally(()=>process.exit(0));});
 start().catch(e=>{console.error("Startup failed:",e);process.exit(1);});
