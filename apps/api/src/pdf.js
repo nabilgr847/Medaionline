@@ -191,7 +191,7 @@ export function makeTextPdf(heading,lines,signatureBuffer=null,signatureMime="im
 }
 
 /** Signed prescription PDF with a medicine table. */
-export function makePrescriptionPdf({patientName,doctorName,bmdc,date,items=[],notes,signatureBuffer,signatureHash,voided=false}){
+export function makePrescriptionPdf({patientName,doctorName,bmdc,date,items=[],notes,advisedTests,signatureBuffer,signatureHash,voided=false}){
   const doc=newDoc("Prescription","Signed prescription");
   doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY);put(doc,"Prescription",48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.5);
   badge(doc,voided?"VOIDED - DO NOT USE":"FINALIZED / DOCTOR-SIGNED",voided?"#b3261e":BLUE);
@@ -209,6 +209,7 @@ export function makePrescriptionPdf({patientName,doctorName,bmdc,date,items=[],n
     cells.forEach((c,k)=>put(doc,c,cols[k][0]+5,y+5,{width:cols[k][1]-8},k===1?"Helvetica-Bold":"Helvetica"));
     doc.moveTo(48,y+h).lineTo(547,y+h).lineWidth(0.4).strokeColor("#dce8ef").stroke();doc.y=y+h;doc.x=48;
   });
+  if(advisedTests){h2(doc,"Advised tests");para(doc,advisedTests);}
   if(notes){h2(doc,"Doctor's notes");para(doc,notes);}
   if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature","");
   if(signatureHash){doc.moveDown(0.8);ensure(doc,40);doc.fontSize(7.5).fillColor(MUTED);put(doc,`In-app digital signature (Ed25519). Content hash: ${signatureHash}. This is not a government-issued qualified digital certificate.`,48,doc.y,{width:499});}

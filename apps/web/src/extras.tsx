@@ -16,7 +16,16 @@ export function DoctorPhoto({ token, doctor, size = 64, v = 0 }: { token: string
   return src ? <img src={src} alt={doctor.name} style={style} /> : <div style={{ ...style, background: "#dff1f5", display: "grid", placeItems: "center", fontSize: size / 2.2 }} aria-hidden="true">🩺</div>;
 }
 
-export function DoctorPicker({ token, doctors, value, onChange }: { token: string; doctors: any[]; value: string; onChange: (id: string) => void }) {
+export function DoctorPicker({ token, doctors, value, onChange, specialties = [] }: { token: string; doctors: any[]; value: string; onChange: (id: string) => void; specialties?: string[] }) {
+  const [q, setQ] = useState("");
+  const [spec, setSpec] = useState("");
+  const specs = specialties.length ? specialties : Array.from(new Set(doctors.map((d) => d.doctorProfile?.specialty).filter(Boolean))).sort();
+  const filtered = doctors.filter((d) => {
+    if (spec && String(d.doctorProfile?.specialty || "").toLowerCase() !== spec.toLowerCase()) return false;
+    if (!q.trim()) return true;
+    const hay = [d.name, d.doctorProfile?.specialty, d.doctorProfile?.clinicName, d.doctorProfile?.bio, ...(d.doctorProfile?.qualifications || [])].join(" ").toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
   const card = (d: any | null) => {
     const p = d?.doctorProfile || {}; const on = (d?._id || "") === value;
     return <button type="button" key={d?._id || "any"} className={"doccard" + (on ? " on" : "")} onClick={() => onChange(d?._id || "")} aria-pressed={on}>
@@ -24,14 +33,26 @@ export function DoctorPicker({ token, doctors, value, onChange }: { token: strin
       <div className="docinfo">
         <b>{d ? "Dr. " + d.name.replace(/^Dr\.?\s*/i, "") : "Any available doctor"}</b>
         {d ? <>
-          {p.specialty && <span>{p.specialty}</span>}
+          <span>{p.specialty || "Specialty not listed"}</span>
           {p.qualifications?.length > 0 && <small>{p.qualifications.join(", ")}</small>}
           <small>{[p.experienceYears ? p.experienceYears + " yrs experience" : "", p.clinicName || ""].filter(Boolean).join(" · ")}</small>
           {p.bio && <small className="docbio">{p.bio}</small>}
         </> : <small>The first doctor to accept your request will take your case.</small>}
       </div>{on && <i className="docok" aria-hidden="true">✓</i>}</button>;
   };
-  return <div className="docpick" role="group" aria-label="Choose a doctor">{card(null)}{doctors.map(card)}</div>;
+  return <div>
+    <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+      <input type="search" placeholder="Search doctor by name, specialty, clinic…" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: "1 1 180px" }} />
+      <label style={{ flex: "0 1 200px" }}>Specialty / category
+        <select value={spec} onChange={(e) => setSpec(e.target.value)}>
+          <option value="">All specialties</option>
+          {specs.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+    </div>
+    <div className="docpick" role="group" aria-label="Choose a doctor">{card(null)}{filtered.map(card)}</div>
+    {filtered.length === 0 && <p className="muted">No doctors match this search. Clear the filters or choose “Any available doctor”.</p>}
+  </div>;
 }
 
 // ---- Global alerts: incoming call (ringing), new messages, missed calls ----

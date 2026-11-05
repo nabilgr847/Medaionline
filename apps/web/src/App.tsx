@@ -62,8 +62,14 @@ function MainApp() {
 
   return <BannerContext.Provider value={banner}><div className="shell">
     <header><img src="/branding/medai-logo.svg" alt="MedAI Hospital" />
-      <nav><a href="#services">Services</a><a href="#safety">Safety</a>{!user && <a href="#portal" onClick={() => setView("home")}>Sign in</a>}</nav>
-      {user && <div className="row"><span className="role">{user.name} · {user.role}</span><button className="outline" onClick={logout}>Sign out</button></div>}</header>
+      <nav>
+        <a href="#services">Services</a>
+        <a href="#safety">Safety</a>
+        {!user && <a href="#portal" onClick={() => setView("home")}>Sign in</a>}
+        {user && <a href="#dashboard" onClick={(e) => { e.preventDefault(); document.getElementById("dashboard")?.scrollIntoView({ behavior: "smooth" }); }}>Dashboard</a>}
+      </nav>
+      {user && <div className="row"><span className="role">{user.name} · {user.role}</span><button className="outline" onClick={logout}>Sign out</button></div>}
+    </header>
 
     {!user && view === "apply" && <DoctorApply mode="new" onBack={() => setView("home")} />}
     {!user && view === "more" && <DoctorApply mode="more" onBack={() => setView("home")} />}
@@ -101,7 +107,7 @@ function MainApp() {
       </div></section></>}
 
     {user && user.role !== "admin" && <AlertCenter api={api} />}
-    {user && <section className="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
+    {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
       {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
       {user.role === "patient" && <PatientPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}

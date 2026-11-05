@@ -8,7 +8,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
   const [tab, setTab] = useState("doctors");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["convos", "Messages & calls"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["banner", "Banner"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["convos", "Messages & calls"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
     {tab === "reports" && <ReportsPanel api={api} token={token} setMessage={setMessage} />}
@@ -17,6 +17,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
     {tab === "monitor" && <LiveMonitoring api={api} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineReview api={api} setMessage={setMessage} />}
     {tab === "import" && <ImportMedicines api={api} setMessage={setMessage} />}
+    {tab === "specialties" && <SpecialtiesEditor api={api} setMessage={setMessage} />}
     {tab === "banner" && <BannerEditor api={api} setMessage={setMessage} />}
     {tab === "security" && <Security api={api} onToken={onToken} setMessage={setMessage} />}
   </div>;
@@ -73,7 +74,12 @@ function LiveMonitoring({ api, setMessage }: { api: Api; setMessage: (s: string)
   const counts = Object.fromEntries((data?.onlineCounts || []).map((x: any) => [x._id, x.count]));
   return <div className="grid">
     <article className="full"><h3>Live platform activity</h3><p className="muted">Auto-refreshes every 10 seconds. A user is considered online after a heartbeat within 75 seconds. Offline status is approximate and depends on browser/network connectivity. Last refresh: {updated || "Loading…"}</p>
-      <div className="row"><b>Online patients: {counts.patient || 0}</b><b>Online doctors: {counts.doctor || 0}</b><b>Active calls: {data?.activeCalls?.length || 0}</b><button className="outline" onClick={load}>Refresh now</button></div>
+      <div className="statgrid">
+        <div className="statcard"><b>{counts.patient || 0}</b><span>Online patients</span></div>
+        <div className="statcard"><b>{counts.doctor || 0}</b><span>Online doctors</span></div>
+        <div className="statcard"><b>{data?.activeCalls?.length || 0}</b><span>Active calls</span></div>
+      </div>
+      <div className="row"><button className="outline" onClick={load}>↻ Refresh now</button></div>
     </article>
     <article className="full"><h3>Online users</h3>{!data?.onlineUsers?.length && <p className="muted">No recent user heartbeats.</p>}
       {(data?.onlineUsers || []).map((u: any) => <div className="item" key={u._id}><b>{u.name}</b> · {u.role} · {u.email}<p className="muted">Last seen: {fmtDate(u.lastSeenAt)} · Last login: {fmtDate(u.lastLoginAt)}</p></div>)}
@@ -89,7 +95,17 @@ function LiveMonitoring({ api, setMessage }: { api: Api; setMessage: (s: string)
 function Overview({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
   const [o, setO] = useState<any>(null);
   useEffect(() => { api("/admin/overview").then(setO).catch((e) => setMessage(e.message)); }, []);
-  return <div className="grid"><article className="full"><h3>Overview</h3>{o ? <p>Patients: {o.patients} · Doctors: {o.doctors} · Pending doctors: {o.pendingDoctors} · Appointments: {o.appointments} · Reports: {o.uploadedReports}</p> : <p className="muted">Loading…</p>}</article></div>;
+  return <div className="grid"><article className="full"><h3>Platform overview</h3>
+    {!o && <p className="muted">Loading…</p>}
+    {o && <div className="statgrid">
+      <div className="statcard"><b>{o.patients}</b><span>Patients</span></div>
+      <div className="statcard"><b>{o.doctors}</b><span>Doctors</span></div>
+      <div className="statcard"><b>{o.pendingDoctors}</b><span>Pending doctors</span></div>
+      <div className="statcard"><b>{o.appointments}</b><span>Appointments</span></div>
+      <div className="statcard"><b>{o.uploadedReports}</b><span>Reports</span></div>
+    </div>}
+    <p className="muted">Use the tabs above for verification, users, live monitoring, medicines, specialties and banner.</p>
+  </article></div>;
 }
 
 function DoctorQueue({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
@@ -119,13 +135,15 @@ function Review({ x, api, token, done, setMessage }: { x: any; api: Api; token: 
 }
 
 function Users({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
-  const [role, setRole] = useState("doctor"); const [users, setUsers] = useState<any[]>([]);
-  async function load() { try { const d = await api(`/admin/users?role=${role}`); setUsers(d.users || []); } catch (e: any) { setMessage(e.message); } }
+  const [role, setRole] = useState("doctor"); const [users, setUsers] = useState<any[]>([]); const [q, setQ] = useState("");
+  async function load() { try { const qs = new URLSearchParams({ role }); if (q.trim()) qs.set("q", q.trim()); const d = await api(`/admin/users?` + qs.toString()); setUsers(d.users || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, [role]);
   async function setStatus(id: string, status: string) { if (status === "suspended" && !confirm("Suspend this account? They will be signed out immediately.")) return; try { await api(`/admin/users/${id}/status`, { method: "POST", body: json({ status }) }); load(); } catch (e: any) { setMessage(e.message); } }
   async function resetPassword(id:string){if(!confirm("Reset this user's password? A temporary password will be shown once."))return;try{const d=await api(`/admin/users/${id}/reset-password`,{method:"POST",body:json({})});window.prompt("Copy this temporary password and share it securely. It will not be shown again:",d.temporaryPassword);setMessage("Password reset completed and audit event recorded.");}catch(e:any){setMessage(e.message);}}
   return <div className="grid"><article className="full"><h3>Users</h3>
-    <div className="row"><button className={role === "doctor" ? "primary" : "outline"} onClick={() => setRole("doctor")}>Doctors</button><button className={role === "patient" ? "primary" : "outline"} onClick={() => setRole("patient")}>Patients</button></div>
+    <div className="row"><button className={role === "doctor" ? "primary" : "outline"} onClick={() => setRole("doctor")}>Doctors</button><button className={role === "patient" ? "primary" : "outline"} onClick={() => setRole("patient")}>Patients</button>
+      <input placeholder="Search name, email, phone, BMDC…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} style={{ flex: "1 1 180px" }} />
+      <button className="outline" onClick={load}>Search</button></div>
     {users.length === 0 && <p className="muted">No users.</p>}
     {users.map((u) => <div className="item" key={u._id}><b>{u.name}</b> · {u.email} · {label(u.status)}<p className="muted">User ID: {u._id}</p>
       {u.role === "doctor" && <p className="muted">BMDC {u.doctorProfile?.bmdcNumber} · {u.doctorProfile?.specialty}</p>}
@@ -260,6 +278,51 @@ function shrinkImage(file: File): Promise<string> {
 }
 
 const BLANK_SLIDE = { eyebrow: "", title: "New slide", subtitle: "", pills: [] as string[], linkText: "", linkUrl: "", image: "", placement: "all" };
+
+
+function SpecialtiesEditor({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    try {
+      const d = await api("/admin/specialties");
+      setText((d.specialties || []).join("\n"));
+    } catch (e: any) { setMessage(e.message); }
+  }
+  useEffect(() => { load(); }, []);
+  async function save(e: any) {
+    e.preventDefault(); setBusy(true);
+    try {
+      const list = text.split(/\n/).map((x) => x.trim()).filter(Boolean);
+      const d = await api("/admin/specialties", { method: "PUT", body: json({ specialties: list }) });
+      setText((d.specialties || []).join("\n"));
+      setMessage(d.message || "Specialty list saved.");
+    } catch (x: any) { setMessage(x.message); }
+    finally { setBusy(false); }
+  }
+  async function reset() {
+    if (!confirm("Reset specialty list to the built-in default?")) return;
+    setBusy(true);
+    try {
+      const d = await api("/admin/specialties", { method: "DELETE" });
+      setText((d.specialties || []).join("\n"));
+      setMessage(d.message || "Reset done.");
+    } catch (x: any) { setMessage(x.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="grid"><article className="full">
+    <h3>Doctor specialties (dropdown list)</h3>
+    <p className="muted">This list appears in the <b>doctor application</b> form and in the patient <b>appointment</b> specialty filter. One specialty per line. Admin controls what options doctors and patients see.</p>
+    <form onSubmit={save}>
+      <label>Specialties<textarea rows={16} value={text} onChange={(e) => setText(e.target.value)} placeholder={"Medicine (Internal Medicine)\nCardiology\nPediatrics"} required /></label>
+      <div className="row">
+        <button className="primary" disabled={busy}>{busy ? "Saving…" : "💾 Save specialty list"}</button>
+        <button type="button" className="outline" disabled={busy} onClick={load}>↻ Reload</button>
+        <button type="button" className="danger" disabled={busy} onClick={reset}>Reset to default</button>
+      </div>
+    </form>
+  </article></div>;
+}
 
 function BannerEditor({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
   const [b, setB] = useState<any>(null); const [n, setN] = useState(0); const [busy, setBusy] = useState(false);

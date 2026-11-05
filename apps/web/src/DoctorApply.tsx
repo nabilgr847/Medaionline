@@ -1,6 +1,6 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
-import { useState } from "react";
-import { postForm } from "./api";
+import { useEffect, useState } from "react";
+import { postForm, API } from "./api";
 
 type Slot = { category: string; text: string; required?: boolean };
 const SLOTS: Slot[] = [
@@ -13,7 +13,9 @@ const SLOTS: Slot[] = [
 
 // mode "new": full doctor application. mode "more": send extra documents when the admin asked for more information.
 export default function DoctorApply({ mode, onBack }: { mode: "new" | "more"; onBack: () => void }) {
-  const [f, setF] = useState<any>({ name: "", email: "", phone: "", password: "", bmdcNumber: "", specialty: "", qualifications: "", experienceYears: "0" });
+  const [f, setF] = useState<any>({ name: "", email: "", phone: "", password: "", bmdcNumber: "", specialty: "", specialtyOther: "", qualifications: "", experienceYears: "0" });
+  const [specs, setSpecs] = useState<string[]>([]);
+  useEffect(() => { fetch((API || "") + "/api/specialties").then((r) => r.json()).then((d) => setSpecs(d.specialties || [])).catch(() => setSpecs([])); }, []);
   const [files, setFiles] = useState<Record<string, File | null>>({});
   const [msg, setMsg] = useState(""); const [done, setDone] = useState(false); const [busy, setBusy] = useState(false);
   const set = (k: string, v: string) => setF({ ...f, [k]: v });
@@ -32,8 +34,13 @@ export default function DoctorApply({ mode, onBack }: { mode: "new" | "more"; on
     }
     if (mode === "more" && chosen.length === 0) { setMsg("Attach at least one document."); return; }
     const fd = new FormData();
-    if (mode === "new") for (const k of Object.keys(f)) fd.append(k, f[k]);
-    else { fd.append("email", f.email); fd.append("password", f.password); }
+    if (mode === "new") {
+      for (const k of Object.keys(f)) {
+        if (k === "specialtyOther") continue;
+        if (k === "specialty" && f.specialty === "Other") fd.append("specialty", String(f.specialtyOther || "").trim());
+        else fd.append(k, f[k]);
+      }
+    } else { fd.append("email", f.email); fd.append("password", f.password); }
     chosen.forEach((s, i) => { fd.append(`category_${i}`, s.category); });
     chosen.forEach((s) => { fd.append("documents", files[s.category] as File); });
     setBusy(true);
@@ -56,7 +63,14 @@ export default function DoctorApply({ mode, onBack }: { mode: "new" | "more"; on
         <label>Password{mode === "new" ? " (minimum 14 characters)" : ""}<input type="password" value={f.password} onChange={(e) => set("password", e.target.value)} required minLength={mode === "new" ? 14 : 1} /></label>
         {mode === "new" && <>
           <label>BMDC registration number<input value={f.bmdcNumber} onChange={(e) => set("bmdcNumber", e.target.value)} required minLength={3} /></label>
-          <label>Specialty<input value={f.specialty} onChange={(e) => set("specialty", e.target.value)} required placeholder="e.g. Medicine, Pediatrics" /></label>
+          <label>Specialty
+            <select value={f.specialty} onChange={(e) => set("specialty", e.target.value)} required>
+              <option value="">Select specialty…</option>
+              {specs.map((s) => <option key={s} value={s}>{s}</option>)}
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          {f.specialty === "Other" && <label>Specify specialty<input value={f.specialtyOther || ""} onChange={(e) => set("specialtyOther", e.target.value)} required minLength={2} placeholder="Type your specialty" /></label>}
           <label>Qualifications (comma separated)<input value={f.qualifications} onChange={(e) => set("qualifications", e.target.value)} required placeholder="MBBS, FCPS" /></label>
           <label>Years of experience<input type="number" min={0} max={70} value={f.experienceYears} onChange={(e) => set("experienceYears", e.target.value)} required /></label>
         </>}

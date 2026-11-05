@@ -80,6 +80,7 @@ async function saveDoctorDocs(userId,files,body){
 }
 function prescriptionCanonical(rx){
   const payload={id:String(rx._id),appointmentId:String(rx.appointmentId),patientId:String(rx.patientId),doctorId:String(rx.doctorId?._id||rx.doctorId),signerName:rx.signerName,signerBmdc:rx.signerBmdc,signedAt:rx.signedAt.toISOString(),items:rx.items.map(x=>({brand:x.brand,generic:x.generic,strength:x.strength,form:x.form,dose:x.dose,frequency:x.frequency,duration:x.duration,instructions:x.instructions})),notes:rx.notes||""};
+  if(rx.advisedTests) payload.advisedTests=String(rx.advisedTests);
   // Preserve compatibility with prescriptions signed before image snapshots existed.
   if(rx.signatureImageHash||rx.signatureImageFileId){payload.signatureImageFileId=String(rx.signatureImageFileId||"");payload.signatureImageHash=String(rx.signatureImageHash||"");}
   return JSON.stringify(payload);
@@ -184,7 +185,9 @@ router.post("/doctor/apply",applyLimiter,upload.array("documents",5),validateUpl
     if(pi<0){await removeFiles(files);return res.status(400).json({error:"Upload your profile photo. Patients see it when choosing a doctor."});}
     if(!["image/jpeg","image/png","image/webp"].includes(files[pi].mimetype)||files[pi].size>3*1024*1024){await removeFiles(files);return res.status(400).json({error:"Profile photo must be a JPG, PNG or WEBP image up to 3 MB."});}
     if(await User.findOne({email:s.data.email.toLowerCase()})){await removeFiles(files);return res.status(409).json({error:"Email already registered"});}
-    const user=await User.create({name:s.data.name,email:s.data.email.toLowerCase(),phone:s.data.phone,passwordHash:await hashPassword(s.data.password),role:"doctor",status:"pending_verification",doctorProfile:{bmdcNumber:s.data.bmdcNumber,specialty:s.data.specialty,qualifications:s.data.qualifications.split(",").map(x=>x.trim()).filter(Boolean),experienceYears:s.data.experienceYears}});
+    const specialty=String(s.data.specialty||"").trim();
+    if(!specialty){await removeFiles(files);return res.status(400).json({error:"Specialty is required"});}
+    const user=await User.create({name:s.data.name,email:s.data.email.toLowerCase(),phone:s.data.phone,passwordHash:await hashPassword(s.data.password),role:"doctor",status:"pending_verification",doctorProfile:{bmdcNumber:s.data.bmdcNumber,specialty,qualifications:s.data.qualifications.split(",").map(x=>x.trim()).filter(Boolean),experienceYears:s.data.experienceYears}});
     await saveDoctorDocs(user.id,files,req.body);
     await audit(req,"doctor.application_submitted","User",user.id,{documentCount:files.length});
     res.status(201).json({message:"Application submitted. Your account stays locked until an admin verifies your documents.",doctorId:user.id,status:user.status});
@@ -212,12 +215,15 @@ router.get("/doctor/me",auth,allow("doctor"),wrap(async(req,res)=>{
 }));
 
 router.patch("/doctor/profile",auth,allow("doctor"),wrap(async(req,res)=>{
-  const s=z.object({phone:z.string().max(30).optional(),clinicName:z.string().max(150).optional(),bio:z.string().max(1000).optional()}).safeParse(req.body);
+  const s=z.object({phone:z.string().max(30).optional(),clinicName:z.string().max(150).optional(),bio:z.string().max(1000).optional(),specialty:z.string().min(2).max(100).optional()}).safeParse(req.body);
   if(!s.success) return res.status(400).json({error:"Invalid profile details"});
   const user=await User.findById(req.user.id);
+  if(!user.doctorProfile) user.doctorProfile={};
   if(s.data.phone!==undefined) user.phone=s.data.phone;
   if(s.data.clinicName!==undefined) user.doctorProfile.clinicName=s.data.clinicName;
   if(s.data.bio!==undefined) user.doctorProfile.bio=s.data.bio;
+  // Allow doctor to set/correct specialty so it shows when patients book
+  if(s.data.specialty!==undefined) user.doctorProfile.specialty=String(s.data.specialty).trim();
   await user.save(); await audit(req,"doctor.profile_updated","User",user.id);
   res.json({user});
 }));
@@ -272,6 +278,18 @@ router.get("/admin/doctors/pending",auth,allow("admin"),wrap(async(req,res)=>{
   res.json({applications:result});
 }));
 
+router.patch("/admin/doctors/:id/profile",auth,allow("admin"),wrap(async(req,res)=>{
+  const s=z.object({specialty:z.string().min(2).max(100).optional(),bmdcNumber:z.string().min(3).max(40).optional(),name:z.string().min(2).max(120).optional()}).safeParse(req.body);
+  if(!s.success) return res.status(400).json({error:"Invalid doctor profile update"});
+  const doctor=await User.findOne({_id:req.params.id,role:"doctor"});
+  if(!doctor) return res.status(404).json({error:"Doctor not found"});
+  if(s.data.name) doctor.name=s.data.name.trim();
+  if(s.data.specialty) doctor.doctorProfile.specialty=s.data.specialty.trim();
+  if(s.data.bmdcNumber) doctor.doctorProfile.bmdcNumber=s.data.bmdcNumber.trim();
+  await doctor.save();
+  await audit(req,"admin.doctor_profile_updated","User",doctor.id,s.data);
+  res.json({doctor:{id:doctor.id,name:doctor.name,specialty:doctor.doctorProfile?.specialty,bmdcNumber:doctor.doctorProfile?.bmdcNumber},message:"Doctor profile updated."});
+}));
 router.post("/admin/doctors/:id/decision",auth,allow("admin"),wrap(async(req,res)=>{
   const s=z.object({decision:z.enum(["approve","reject","request_info"]),note:z.string().max(1000).optional()}).safeParse(req.body);
   if(!s.success) return res.status(400).json({error:"Invalid decision"});
@@ -288,9 +306,15 @@ router.post("/admin/doctors/:id/decision",auth,allow("admin"),wrap(async(req,res
 router.get("/profile",auth,wrap(async(req,res)=>{
   const user=await User.findById(req.user.id).select("-passwordHash"); res.json({user});
 }));
+router.patch("/prefs",auth,wrap(async(req,res)=>{
+  const s=z.object({notifyEmailOnMessage:z.boolean().optional()}).safeParse(req.body);
+  if(!s.success) return res.status(400).json({error:"Invalid preferences"});
+  const user=await User.findByIdAndUpdate(req.user.id,{$set:s.data},{new:true,runValidators:true}).select("-passwordHash");
+  res.json({user,message:"Preferences saved."});
+}));
 router.patch("/profile",auth,allow("patient"),wrap(async(req,res)=>{
   const em=z.object({name:z.string().max(120).optional(),phone:z.string().max(30).optional(),relationship:z.string().max(60).optional()});
-  const s=z.object({name:z.string().min(2).max(120).optional(),phone:z.string().max(30).optional(),dateOfBirth:z.string().max(40).optional(),address:z.string().max(300).optional(),gender:z.string().max(30).optional(),bloodGroup:z.string().max(10).optional(),allergies:z.array(z.string().max(100)).max(50).optional(),currentMedicines:z.array(z.string().max(120)).max(50).optional(),medicalHistory:z.string().max(5000).optional(),emergencyContact:em.optional()}).safeParse(req.body);
+  const s=z.object({name:z.string().min(2).max(120).optional(),phone:z.string().max(30).optional(),dateOfBirth:z.string().max(40).optional(),address:z.string().max(300).optional(),gender:z.string().max(30).optional(),bloodGroup:z.string().max(10).optional(),allergies:z.array(z.string().max(100)).max(50).optional(),currentMedicines:z.array(z.string().max(120)).max(50).optional(),medicalHistory:z.string().max(5000).optional(),emergencyContact:em.optional(),notifyEmailOnMessage:z.boolean().optional()}).safeParse(req.body);
   if(!s.success) return res.status(400).json({error:"Invalid profile details",details:s.error.flatten()});
   const update={...s.data};
   if("dateOfBirth" in update){
@@ -302,8 +326,13 @@ router.patch("/profile",auth,allow("patient"),wrap(async(req,res)=>{
 router.post("/files/upload",auth,upload.single("file"),validateUploads,wrap(async(req,res)=>{
   if(!req.file) return res.status(400).json({error:"File is required"});
   const category=String(req.body.category||"patient_report");
-  const allowed=req.user.role==="patient"?["patient_report","other"]:["other","other_qualification"];
+  const allowed=req.user.role==="patient"?["patient_report","other","chat_attachment"]:req.user.role==="doctor"?["other","other_qualification","chat_attachment"]:["other"];
   if(!allowed.includes(category)){return res.status(400).json({error:"Invalid file category"});}
+  if(category==="chat_attachment"){
+    const mt=req.file.mimetype||"";
+    if(!/^(image\/(jpeg|png|webp)|audio\/(mpeg|mp4|ogg|webm|wav)|video\/(mp4|webm|quicktime))$/.test(mt))
+      return res.status(400).json({error:"Chat attachments must be image, audio or video"});
+  }
   const record=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category,originalName:req.file.originalname,mimeType:req.file.mimetype,buffer:req.file.buffer});
   await audit(req,"file.uploaded","PrivateFile",record.id,{category});
   res.status(201).json({file:{id:record.id,category:record.category,originalName:record.originalName,size:record.size,createdAt:record.createdAt}});
@@ -336,6 +365,14 @@ router.get("/files/:id/download",auth,wrap(async(req,res)=>{
     permitted=!!report && (String(report.patientId)===String(req.user.id) || (req.user.role==="doctor" && String(report.doctorId)===String(req.user.id)));
     if(permitted) accessAction="medical_report.pdf_access";
   }
+  if(!permitted && file.category==="chat_attachment"){
+    const msg=await Message.findOne({"attachments.fileId":file._id}).select("appointmentId");
+    if(msg){
+      const ap=await Appointment.findById(msg.appointmentId).select("patientId doctorId");
+      permitted=!!ap && (String(ap.patientId)===String(req.user.id) || String(ap.doctorId)===String(req.user.id) || req.user.role==="admin");
+      if(permitted) accessAction="chat.attachment_access";
+    }
+  }
   if(!permitted) return res.status(403).json({error:"Access denied"});
   if(accessAction) await audit(req,accessAction,"PrivateFile",file.id);
   const downloadPath=await resolveStoredFilePath(uploadDir,file);
@@ -350,12 +387,23 @@ router.delete("/files/:id",auth,wrap(async(req,res)=>{
 }));
 
 router.post("/appointments",auth,allow("patient"),wrap(async(req,res)=>{
-  const s=z.object({problem:z.string().min(5).max(4000),doctorId:z.string().optional(),consultationType:z.enum(["online","in_person"]).default("online"),preferredAt:z.string().datetime().optional()}).safeParse(req.body);
+  const s=z.object({problem:z.string().min(5).max(4000),doctorId:z.string().optional(),consultationType:z.enum(["online","in_person"]).default("online"),preferredAt:z.string().datetime().optional(),pastDiseases:z.string().max(2000).optional(),pastInfo:z.string().max(4000).optional()}).safeParse(req.body);
   if(!s.success) return res.status(400).json({error:"Please describe the reason for appointment"});
   let preferredAt=null;
   if(s.data.preferredAt){if(!s.data.doctorId)return res.status(400).json({error:"Choose a doctor to pick a time slot"});const pd=await User.findOne({_id:s.data.doctorId,role:"doctor",status:"active"});if(!pd)return res.status(400).json({error:"Selected doctor is unavailable"});const why=await slotIsFree(pd,new Date(s.data.preferredAt));if(why)return res.status(409).json({error:why});preferredAt=new Date(s.data.preferredAt);}
   if(s.data.doctorId && !await User.findOne({_id:s.data.doctorId,role:"doctor",status:"active"})) return res.status(400).json({error:"Selected doctor is unavailable"});
-  const appt=await Appointment.create({patientId:req.user.id,doctorId:s.data.doctorId||null,problem:s.data.problem,consultationType:s.data.consultationType,preferredAt});
+  const pastDiseases=String(s.data.pastDiseases||"").trim();
+  const pastInfo=String(s.data.pastInfo||"").trim();
+  const appt=await Appointment.create({patientId:req.user.id,doctorId:s.data.doctorId||null,problem:s.data.problem,consultationType:s.data.consultationType,preferredAt,pastDiseases,pastInfo});
+  // Merge past diseases into health profile history when provided
+  if(pastDiseases||pastInfo){
+    const u=await User.findById(req.user.id).select("medicalHistory");
+    if(u){
+      const bits=[u.medicalHistory||"", pastDiseases?("Past diseases: "+pastDiseases):"", pastInfo||""].filter(Boolean);
+      const merged=Array.from(new Set(bits.join("\n").split("\n").map(x=>x.trim()).filter(Boolean))).join("\n").slice(0,5000);
+      if(merged!==(u.medicalHistory||"")) {u.medicalHistory=merged; await u.save();}
+    }
+  }
   await audit(req,"appointment.requested","Appointment",appt.id);
   if(appt.doctorId) await notify(appt.doctorId,"appointment_requested","New appointment request",`${req.user.name} requested an appointment${appt.preferredAt?" for "+appt.preferredAt.toISOString():""}. Open New requests to respond.`,"Appointment",appt.id);
   res.status(201).json({appointment:appt});
@@ -399,8 +447,11 @@ router.get("/appointments/:id/patient-record",auth,allow("doctor"),wrap(async(re
   if(!appt) return res.status(403).json({error:"Record is available only for your active appointments"});
   const patient=await User.findById(appt.patientId).select("name phone dateOfBirth gender bloodGroup allergies currentMedicines medicalHistory emergencyContact");
   const files=await PrivateFile.find({ownerId:appt.patientId,category:"patient_report"}).select("originalName mimeType size createdAt").sort({createdAt:-1});
+  const priorAppts=await Appointment.find({patientId:appt.patientId,_id:{$ne:appt._id}}).select("problem pastDiseases pastInfo status scheduledAt createdAt").sort({createdAt:-1}).limit(10);
+  const priorRx=await Prescription.find({patientId:appt.patientId,status:"signed"}).select("items advisedTests notes signedAt").sort({signedAt:-1}).limit(5);
+  const priorReports=await MedicalReport.find({patientId:appt.patientId,status:{$in:["approved","signed","delivered"]}}).select("docType findings advisedTests doctorExplanation reviewedAt signedAt").sort({updatedAt:-1}).limit(5);
   await audit(req,"doctor.patient_record_viewed","Appointment",appt.id);
-  res.json({patient,files});
+  res.json({patient,files,appointment:{pastDiseases:appt.pastDiseases||"",pastInfo:appt.pastInfo||"",problem:appt.problem},priorAppointments:priorAppts,priorPrescriptions:priorRx,priorReports});
 }));
 
 router.get("/appointments/:id/messages",auth,wrap(async(req,res)=>{
@@ -415,16 +466,34 @@ router.post("/appointments/:id/messages",auth,wrap(async(req,res)=>{
   const isAdmin=req.user.role==="admin";
   const allowed=String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id)||isAdmin;
   if(!allowed || !appt.doctorId) return res.status(403).json({error:"Conversation is not available"});
-  const body=String(req.body.body||"").trim(); if(!body||body.length>5000) return res.status(400).json({error:"Message must be 1-5000 characters"});
-  const message=await Message.create({appointmentId:appt.id,senderId:req.user.id,body});
+  if(["cancelled","rejected"].includes(appt.status)) return res.status(409).json({error:"Messaging is closed for this appointment"});
+  const body=String(req.body.body||"").trim();
+  const rawAtt=Array.isArray(req.body.attachments)?req.body.attachments:[];
+  if((!body&&!rawAtt.length)||body.length>5000) return res.status(400).json({error:"Message must include text (1-5000 characters) and/or attachments"});
+  const attachments=[];
+  for(const a of rawAtt.slice(0,5)){
+    const fid=String(a.fileId||a.id||"");
+    if(!fid) continue;
+    const f=await PrivateFile.findOne({_id:fid,ownerId:req.user.id,category:"chat_attachment"});
+    if(!f) return res.status(400).json({error:"Invalid attachment. Upload the file first."});
+    const kind=/^image\//.test(f.mimeType)?"image":/^audio\//.test(f.mimeType)?"audio":/^video\//.test(f.mimeType)?"video":"file";
+    attachments.push({fileId:f._id,originalName:f.originalName,mimeType:f.mimeType,kind,size:f.size});
+  }
+  if(!body&&!attachments.length) return res.status(400).json({error:"Message must include text or attachments"});
+  const message=await Message.create({appointmentId:appt.id,senderId:req.user.id,body:body||(attachments.length?"(attachment)":""),attachments});
   // Tell the other person. While they have not read it, several messages from one chat become ONE notification ("3 new messages").
   try{
     const targets=isAdmin?[appt.patientId,appt.doctorId]:[String(appt.patientId)===String(req.user.id)?appt.doctorId:appt.patientId];
+    const preview=body||(attachments[0]?("["+attachments[0].kind+"] "+attachments[0].originalName):"");
     for(const toId of targets){
+      if(!toId) continue;
       const who=isAdmin?"Admin":req.user.role==="doctor"?"Dr. "+req.user.name:req.user.name;
       const prev=await Notification.findOne({userId:toId,type:"new_message",resourceId:String(appt.id),readAt:null});
-      if(prev){const c=(prev.count||1)+1;prev.count=c;prev.title=`${c} new messages from ${who}`;prev.message=body.slice(0,140);prev.createdAt=new Date();await prev.save();}
-      else await Notification.create({userId:toId,type:"new_message",title:`New message from ${who}`,message:body.slice(0,140),resourceType:"Appointment",resourceId:String(appt.id),count:1});
+      if(prev){const c=(prev.count||1)+1;prev.count=c;prev.title=`${c} new messages from ${who}`;prev.message=preview.slice(0,140);prev.createdAt=new Date();await prev.save();}
+      else await Notification.create({userId:toId,type:"new_message",title:`New message from ${who}`,message:preview.slice(0,140),resourceType:"Appointment",resourceId:String(appt.id),count:1});
+      // Optional email for new messages (user preference, default on)
+      const recip=await User.findById(toId).select("notifyEmailOnMessage status role");
+      if(recip&&recip.status==="active"&&recip.notifyEmailOnMessage!==false) emailNotification(toId,`New message from ${who}`,preview.slice(0,300)).catch(()=>{});
     }
   }catch(e){console.error("message notify failed",e.message);}
   res.status(201).json({message});
@@ -580,11 +649,40 @@ router.post("/appointments/:id/recording-analysis",auth,aiLimiter,wrap(async(req
   await audit(req,"call.transcript_analyzed","Appointment",r.appt.id,{transcriptLength:transcript.length}); res.json({summary,disclaimer:"AI-generated draft for clinician review only. It is not a diagnosis, prescription, or verified medical record. Avoid sharing identifying details."});
 }));
 
-router.get("/doctors",wrap(async(_req,res)=>{
-  const doctors=await User.find({role:"doctor",status:"active"}).select("name doctorProfile.specialty doctorProfile.qualifications doctorProfile.experienceYears doctorProfile.bio doctorProfile.clinicName doctorProfile.verifiedAt").lean();
+router.get("/doctors",wrap(async(req,res)=>{
+  const q=String(req.query.q||"").trim();
+  const specialty=String(req.query.specialty||"").trim();
+  const filter={role:"doctor",status:"active"};
+  if(specialty) filter["doctorProfile.specialty"]=new RegExp("^"+escapeRegex(specialty)+"$","i");
+  if(q){
+    const rx=new RegExp(escapeRegex(q),"i");
+    filter.$or=[{name:rx},{"doctorProfile.specialty":rx},{"doctorProfile.clinicName":rx},{"doctorProfile.bio":rx},{"doctorProfile.qualifications":rx}];
+  }
+  const doctors=await User.find(filter).select("name doctorProfile").lean();
   const photos=await PrivateFile.find({category:"doctor_photo",ownerId:{$in:doctors.map(d=>d._id)}}).select("ownerId").lean();
   const has=new Set(photos.map(p=>String(p.ownerId)));
-  res.json({doctors:doctors.map(d=>({...d,hasPhoto:has.has(String(d._id))}))});
+  const fromDb=await User.distinct("doctorProfile.specialty",{role:"doctor",status:"active","doctorProfile.specialty":{$nin:[null,""]}});
+  const managed=await loadSpecialties();
+  const specialties=Array.from(new Set([...(fromDb||[]).filter(Boolean),...managed])).sort((a,b)=>String(a).localeCompare(String(b)));
+  res.json({
+    doctors:doctors.map(d=>{
+      const dp=d.doctorProfile||{};
+      return {
+        _id:d._id,
+        name:d.name,
+        hasPhoto:has.has(String(d._id)),
+        doctorProfile:{
+          specialty:dp.specialty||"",
+          qualifications:dp.qualifications||[],
+          experienceYears:dp.experienceYears,
+          bio:dp.bio||"",
+          clinicName:dp.clinicName||"",
+          verifiedAt:dp.verifiedAt||null
+        }
+      };
+    }),
+    specialties
+  });
 }));
 router.get("/doctors/:id/photo",auth,wrap(async(req,res)=>{
   const u=await User.findOne({_id:req.params.id,role:"doctor",status:"active"}).select("_id"); if(!u) return res.status(404).json({error:"Not found"});
@@ -810,7 +908,7 @@ router.post("/appointments/:id/prescriptions",auth,allow("doctor"),wrap(async(re
   if(!appt||String(appt.doctorId)!==String(req.user.id)) return res.status(403).json({error:"Only the assigned doctor can create a prescription"});
   if(!PRESCRIBE_STATUSES.includes(appt.status)) return res.status(409).json({error:"Confirm the appointment before prescribing"});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  const rx=await Prescription.create({appointmentId:appt.id,patientId:appt.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000)});
+  const rx=await Prescription.create({appointmentId:appt.id,patientId:appt.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000)});
   await audit(req,"prescription.draft_created","Prescription",rx.id); res.status(201).json({prescription:rx});
 }));
 router.post("/reports/:id/prescriptions",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -819,7 +917,7 @@ router.post("/reports/:id/prescriptions",auth,allow("doctor"),wrap(async(req,res
   if(!rep) return res.status(403).json({error:"Only the assigned doctor can prescribe from this report"});
   if(!["approved","signed","delivered"].includes(rep.status)) return res.status(409).json({error:"Approve the report first, then write the prescription"});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  const rx=await Prescription.create({reportId:rep.id,patientId:rep.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000)});
+  const rx=await Prescription.create({reportId:rep.id,patientId:rep.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000)});
   await audit(req,"prescription.draft_created_from_report","Prescription",rx.id); res.status(201).json({prescription:rx});
 }));
 router.patch("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -827,7 +925,7 @@ router.patch("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
   if(!rx||String(rx.doctorId)!==String(req.user.id)) return res.status(403).json({error:"Only the prescribing doctor can edit this prescription"});
   if(rx.status!=="draft") return res.status(409).json({error:"Signed prescriptions cannot be edited. Void it and write a new one."});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  rx.items=c.items; rx.notes=String(req.body.notes||"").slice(0,4000); await rx.save();
+  rx.items=c.items; rx.notes=String(req.body.notes||"").slice(0,4000); rx.advisedTests=String(req.body.advisedTests||"").slice(0,2000); await rx.save();
   await audit(req,"prescription.draft_updated","Prescription",rx.id); res.json({prescription:rx});
 }));
 router.delete("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -856,7 +954,7 @@ router.post("/prescriptions/:id/sign",auth,allow("doctor"),wrap(async(req,res)=>
   rx.status="signed";
   const signatureBytes=await readStoredFileBuffer(uploadDir,signatureFile);
   const patient=await User.findById(rx.patientId).select("name");
-  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
+  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,advisedTests:rx.advisedTests,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
   const pdfFile=await storeBuffer({ownerId:rx.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"signed-prescription.pdf",mimeType:"application/pdf",buffer:pdfBuffer});rx.pdfFileId=pdfFile._id;
   await rx.save(); await notify(rx.patientId,"prescription_issued","New prescription issued","Your doctor has issued a signed prescription. It is available in your prescription history.","Prescription",rx.id);
   await audit(req,"prescription.signed","Prescription",rx.id,{signatureHash:rx.signatureHash,algorithm:"Ed25519",signatureImageHash:rx.signatureImageHash});
@@ -962,7 +1060,13 @@ router.post("/appointments/:id/claim",auth,allow("doctor"),wrap(async(req,res)=>
 
 router.get("/admin/users",auth,allow("admin"),wrap(async(req,res)=>{
   const role=["patient","doctor"].includes(String(req.query.role))?String(req.query.role):"doctor";
-  const users=await User.find({role,status:{$in:["active","suspended"]}}).select("name email phone status role doctorProfile.specialty doctorProfile.bmdcNumber createdAt").sort({createdAt:-1}).limit(200);
+  const q=String(req.query.q||"").trim();
+  const filter={role,status:{$in:["active","suspended"]}};
+  if(q){
+    const rx=new RegExp(escapeRegex(q),"i");
+    filter.$or=[{name:rx},{email:rx},{phone:rx},{"doctorProfile.bmdcNumber":rx},{"doctorProfile.specialty":rx}];
+  }
+  const users=await User.find(filter).select("name email phone status role doctorProfile.specialty doctorProfile.bmdcNumber createdAt lastLoginAt lastSeenAt").sort({createdAt:-1}).limit(200);
   res.json({users});
 }));
 router.post("/admin/users/:id/status",auth,allow("admin"),wrap(async(req,res)=>{
@@ -1172,6 +1276,7 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
   const report=await MedicalReport.findOne({_id:req.params.id,doctorId:req.user.id}); if(!report) return res.status(404).json({error:"Assigned report not found"});
   if(["approved","signed","delivered","rejected"].includes(report.status)) return res.status(409).json({error:"This report review is already finalized"});
   const comment=String(req.body.comment||"").trim().slice(0,4000);
+  if(action!=="reject"){ if(typeof req.body.explanation==="string"){const t=req.body.explanation.trim().slice(0,8000);report.doctorExplanation=(t&&t!==String(report.aiExplanation||"").trim())?t:"";} if(typeof req.body.tests==="string") report.advisedTests=req.body.tests.trim().slice(0,2000); }
   if(action==="start") report.status="under_review";
   if(action==="comment"){if(!comment)return res.status(400).json({error:"Add a review comment"});report.status="under_review";report.reviewComment=comment;}
   if(action==="request_changes"){if(!comment)return res.status(400).json({error:"Explain what needs to be corrected"});report.status="changes_requested";report.reviewComment=comment;await notify(report.patientId,"report_changes_requested","Changes requested",comment,"MedicalReport",report.id);}
@@ -1186,7 +1291,7 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
     const finalPdf=await makeReportPdf({heading:"Doctor-Reviewed Lab Report",subtitle:"Reviewed and approved by a doctor",banner:"DOCTOR-APPROVED",bannerColor:"#17805f",
       meta:[["Patient",patient?.name||"Patient"],["Reviewing doctor",doctor.name],["BMDC",doctor.doctorProfile?.bmdcNumber||"Not provided"],["Approved",report.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"]],
       urgency:report.docType==="lab"||!report.docType?report.urgencyLevel:null,findings:report.findings,showCounts:!report.docType||report.docType==="lab",
-      leadSections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},...reportSections(report.aiStructured||{summary:report.aiExplanation||""},report.docType||"lab","").lead],
+      leadSections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},...(report.doctorExplanation?[{heading:"Doctor's description",text:report.doctorExplanation}]:reportSections(report.aiStructured||{summary:report.aiExplanation||""},report.docType||"lab","").lead),...(report.advisedTests?[{heading:"Advised tests",text:report.advisedTests}]:[])],
       sections:reportSections(report.aiStructured||{},report.docType||"lab","").rest,timeline:flowSteps("signed",doctor.name),
       signatureBuffer:signatureBytes,signatureCaption:"Signature is stored as a protected image snapshot on this finalized record.",
       disclaimer:"Educational information. Interpretation of results belongs to your doctor."});
@@ -1194,7 +1299,7 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
     await notify(report.patientId,"report_approved","Doctor-approved report available","Your doctor has reviewed and approved a medical report.","MedicalReport",report.id);
   }
   await report.save(); await audit(req,`medical_report.${action}`,"MedicalReport",report.id,{status:report.status});
-  res.json({report:{id:report.id,status:report.status,reviewComment:report.reviewComment,rejectionReason:report.rejectionReason,finalPdfFileId:report.finalPdfFileId}});
+  res.json({report:{id:report.id,status:report.status,doctorExplanation:report.doctorExplanation,advisedTests:report.advisedTests,reviewComment:report.reviewComment,rejectionReason:report.rejectionReason,finalPdfFileId:report.finalPdfFileId}});
 }));
 router.get("/notifications/mine",auth,wrap(async(req,res)=>{const notifications=await Notification.find({userId:req.user.id}).sort({createdAt:-1}).limit(100);res.json({notifications});}));
 router.post("/notifications/:id/read",auth,wrap(async(req,res)=>{const n=await Notification.findOneAndUpdate({_id:req.params.id,userId:req.user.id},{$set:{readAt:new Date()}},{new:true});if(!n)return res.status(404).json({error:"Notification not found"});res.json({notification:n});}));
@@ -1220,7 +1325,46 @@ router.post("/admin/users/:id/reset-password",auth,allow("admin"),sensitiveLimit
   res.json({message:"Password reset. Share this temporary password securely; it is shown only once.",temporaryPassword});
 }));
 
+// ---- Specialty list for doctor apply + patient appointment dropdown (admin-managed)
+const SPECIALTIES_DEFAULT=["Medicine (Internal Medicine)", "Cardiology", "Pediatrics", "Gynecology & Obstetrics", "Orthopedics", "Dermatology", "ENT (Otolaryngology)", "Ophthalmology", "Neurology", "Psychiatry", "General Surgery", "Urology", "Nephrology", "Gastroenterology", "Pulmonology / Chest", "Endocrinology", "Oncology", "Dentistry", "Family Medicine", "Emergency Medicine", "Radiology", "Pathology", "Anesthesiology", "Physiotherapy"];
+async function loadSpecialties(){
+  const s=await Setting.findOne({key:"specialties"}).lean();
+  const list=Array.isArray(s?.value?.list)?s.value.list:[];
+  const cleaned=list.map(x=>String(x||"").trim()).filter(x=>x.length>=2&&x.length<=100);
+  return cleaned.length?cleaned:[...SPECIALTIES_DEFAULT];
+}
+router.get("/specialties",wrap(async(_req,res)=>{
+  res.set("Cache-Control","public, max-age=30");
+  res.json({specialties:await loadSpecialties()});
+}));
+router.get("/admin/specialties",auth,allow("admin"),wrap(async(_req,res)=>{
+  res.json({specialties:await loadSpecialties(),defaults:SPECIALTIES_DEFAULT});
+}));
+router.put("/admin/specialties",auth,allow("admin"),wrap(async(req,res)=>{
+  const raw=Array.isArray(req.body.specialties)?req.body.specialties:String(req.body.text||"").split(/\n|,/);
+  const list=[];
+  const seen=new Set();
+  for(const x of raw){
+    const v=String(x||"").trim().replace(/\s+/g," ");
+    if(v.length<2||v.length>100) continue;
+    const key=v.toLowerCase();
+    if(seen.has(key)) continue;
+    seen.add(key); list.push(v);
+  }
+  if(!list.length) return res.status(400).json({error:"Add at least one specialty (2–100 characters each)."});
+  if(list.length>80) return res.status(400).json({error:"Maximum 80 specialties allowed."});
+  await Setting.findOneAndUpdate({key:"specialties"},{key:"specialties",value:{list},updatedBy:req.user.id},{upsert:true,new:true});
+  await audit(req,"admin.specialties_update","Setting","specialties",{count:list.length});
+  res.json({message:"Specialty list saved. Doctor apply and appointment dropdowns will use this list.",specialties:list});
+}));
+router.delete("/admin/specialties",auth,allow("admin"),wrap(async(req,res)=>{
+  await Setting.deleteOne({key:"specialties"});
+  await audit(req,"admin.specialties_reset","Setting","specialties");
+  res.json({message:"Specialty list reset to default",specialties:[...SPECIALTIES_DEFAULT]});
+}));
+
 // ---- Home page banner slideshow (public read, admin edit)
+
 const SLIDE_DEFAULT={eyebrow:"YOUR HEALTH, OUR PRIORITY",title:"Healthcare support, connected around you.",subtitle:"Organize your health journey, request clinician appointments, and understand general health information.",pills:["Patient care","Doctor-led review","Secure access"],linkText:"",linkUrl:"",image:""};
 const BANNER_DEFAULT={active:true,intervalSec:5,slides:[SLIDE_DEFAULT]};
 const slideSchema=z.object({

@@ -8,6 +8,7 @@ import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPicker } from "./extras";
 
 const CANCELLABLE = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "follow_up_required"];
+const ACTIVE_CHAT = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "follow_up_required", "completed"];
 
 export default function PatientPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
   const [tab, setTab] = useState("appointments");
@@ -28,22 +29,29 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
 }
 
 function Appointments({ api, token, user, setMessage }: { api: Api; token: string; user: any; setMessage: (s: string) => void }) {
-  const [list, setList] = useState<any[]>([]); const [doctors, setDoctors] = useState<any[]>([]);
+  const [list, setList] = useState<any[]>([]); const [doctors, setDoctors] = useState<any[]>([]); const [specialties, setSpecialties] = useState<string[]>([]);
   const [slot, setSlot] = useState(""); const [problem, setProblem] = useState(""); const [doctorId, setDoctorId] = useState(""); const [type, setType] = useState("online"); const [openChat, setOpenChat] = useState(""); const [openCall, setOpenCall] = useState("");
+  const [pastDiseases, setPastDiseases] = useState(""); const [pastInfo, setPastInfo] = useState("");
   async function load() { try { const d = await api("/appointments"); setList(d.appointments || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { const f = () => { const d = (window as any).__medaiOpen; if (!d) return; if (d.kind === "call") { setOpenCall(d.appointmentId); setOpenChat(""); } else { setOpenChat(d.appointmentId); } load(); (window as any).__medaiOpen = null; }; f(); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
-  useEffect(() => { load(); api("/doctors").then((d) => setDoctors(d.doctors || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api("/doctors").then((d) => { setDoctors(d.doctors || []); setSpecialties(d.specialties || []); }).catch(() => {}); }, []);
   async function book(e: any) {
     e.preventDefault();
-    try { await api("/appointments", { method: "POST", body: json({ problem, consultationType: type, ...(doctorId ? { doctorId } : {}), ...(doctorId && slot ? { preferredAt: slot } : {}) }) }); setProblem(""); setDoctorId(""); setSlot(""); setMessage("Appointment request submitted. A doctor will accept it and confirm a time."); load(); } catch (x: any) { setMessage(x.message); }
+    try {
+      await api("/appointments", { method: "POST", body: json({ problem, consultationType: type, pastDiseases, pastInfo, ...(doctorId ? { doctorId } : {}), ...(doctorId && slot ? { preferredAt: slot } : {}) }) });
+      setProblem(""); setDoctorId(""); setSlot(""); setPastDiseases(""); setPastInfo("");
+      setMessage("Appointment request submitted. A doctor will accept it and confirm a time."); load();
+    } catch (x: any) { setMessage(x.message); }
   }
   async function respond(id: string, accept: boolean) { try { await api(`/appointments/${id}/respond-proposal`, { method: "POST", body: json({ accept }) }); setMessage(accept ? "Time accepted. Your appointment is confirmed." : "Suggested time declined."); load(); } catch (x: any) { setMessage(x.message); load(); } }
   async function cancel(id: string) { if (!confirm("Cancel this appointment?")) return; try { await api(`/appointments/${id}/cancel`, { method: "POST", body: json({}) }); setMessage("Appointment cancelled."); load(); } catch (x: any) { setMessage(x.message); } }
   return <div className="grid">
     <article><h3>Request an appointment</h3><form onSubmit={book}>
       <textarea placeholder="Describe the reason for your appointment" value={problem} onChange={(e) => setProblem(e.target.value)} required minLength={5} />
-      <label>Choose a doctor (optional)</label>
-      <DoctorPicker token={token} doctors={doctors} value={doctorId} onChange={(id) => { setDoctorId(id); setSlot(""); }} />
+      <label>Past diseases / chronic conditions (optional)<textarea placeholder="e.g. diabetes, hypertension, asthma…" value={pastDiseases} onChange={(e) => setPastDiseases(e.target.value)} maxLength={2000} rows={2} /></label>
+      <label>Other past medical information (optional)<textarea placeholder="Previous surgeries, hospital stays, allergies detail, family history…" value={pastInfo} onChange={(e) => setPastInfo(e.target.value)} maxLength={4000} rows={2} /></label>
+      <label>Choose a doctor (optional) — search or filter by specialty</label>
+      <DoctorPicker token={token} doctors={doctors} specialties={specialties} value={doctorId} onChange={(id) => { setDoctorId(id); setSlot(""); }} />
       {doctorId && <SlotPicker api={api} doctorId={doctorId} value={slot} onChange={setSlot} />}
       <label>Consultation type<select value={type} onChange={(e) => setType(e.target.value)}><option value="online">Online</option><option value="in_person">In person</option></select></label>
       <button className="primary">📨 Send request</button></form>
@@ -58,12 +66,12 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
         {a.proposal?.status === "declined" && a.status === "requested" && <p className="muted">You declined the last suggested time. The doctor can suggest another.</p>}
         <p className="muted">{a.doctorId ? "Dr. " + a.doctorId.name + (a.doctorId.doctorProfile?.specialty ? " (" + a.doctorId.doctorProfile.specialty + ")" : "") : "Waiting for a doctor to accept"} · {label(a.consultationType)}</p>
         <div className="row">
-          {a.doctorId && <button className="outline" onClick={() => setOpenChat(openChat === a._id ? "" : a._id)}>{openChat === a._id ? "Hide chat" : "Chat"}</button>}
-          {a.doctorId && a.consultationType === "online" && <button className="outline" onClick={() => setOpenCall(openCall === a._id ? "" : a._id)}>{openCall === a._id ? "Hide call" : "Audio / Video call"}</button>}
+          {a.doctorId && ACTIVE_CHAT.includes(a.status) && <button className="outline" onClick={() => setOpenChat(openChat === a._id ? "" : a._id)}>{openChat === a._id ? "Hide chat" : "Chat"}</button>}
+          {a.doctorId && a.consultationType === "online" && ACTIVE_CHAT.includes(a.status) && a.status !== "completed" && <button className="outline" onClick={() => setOpenCall(openCall === a._id ? "" : a._id)}>{openCall === a._id ? "Hide call" : "Audio / Video call"}</button>}
           {CANCELLABLE.includes(a.status) && <button className="danger" onClick={() => cancel(a._id)}>Cancel</button>}
         </div>
-        {openChat === a._id && <Chat api={api} appointmentId={a._id} meId={user.id} />}
-        {openCall === a._id && <TeleVisitCall api={api} token={token} appointmentId={a._id} user={user} setMessage={setMessage} />}
+        {openChat === a._id && ACTIVE_CHAT.includes(a.status) && <Chat api={api} appointmentId={a._id} meId={user.id} token={token} />}
+        {openCall === a._id && ACTIVE_CHAT.includes(a.status) && a.status !== "completed" && <TeleVisitCall api={api} token={token} appointmentId={a._id} user={user} setMessage={setMessage} />}
       </div>)}</article>
   </div>;
 }
@@ -167,6 +175,7 @@ function MyPrescriptions({ api, token, user, setMessage }: { api: Api; token: st
       <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>Dr. {rx.doctorId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time></div>
       {rx.status === "voided" && <p className="warn">This prescription was voided{rx.voidReason ? ": " + rx.voidReason : ""}. Do not use it.</p>}
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}{i.instructions ? " (" + i.instructions + ")" : ""}</p>)}
+      {rx.advisedTests && <p style={{ whiteSpace: "pre-wrap" }}><b>Advised tests:</b> {rx.advisedTests}</p>}
       {rx.notes && <p className="muted">Notes: {rx.notes}</p>}
       <div className="row"><button className="outline" onClick={() => verify(rx._id)}>🔏 Verify signature</button><button className="outline" onClick={() => printRx(rx, user.name)}>🖨️ Print</button>{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>⬇️ Download signed PDF</button>}</div>
       {check[rx._id] && <p className="notice">{check[rx._id]}</p>}
@@ -180,15 +189,15 @@ function MedicineSearch({api,setMessage}:{api:Api;setMessage:(s:string)=>void}){
 }
 
 function Profile({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
-  const [f, setF] = useState<any>({ name: "", phone: "", dateOfBirth: "", gender: "", bloodGroup: "", address: "", allergies: "", currentMedicines: "", medicalHistory: "", ecName: "", ecPhone: "", ecRel: "" });
+  const [f, setF] = useState<any>({ name: "", phone: "", dateOfBirth: "", gender: "", bloodGroup: "", address: "", allergies: "", currentMedicines: "", medicalHistory: "", ecName: "", ecPhone: "", ecRel: "", notifyEmailOnMessage: true });
   useEffect(() => {
-    api("/profile").then(({ user: u }) => setF({ name: u.name || "", phone: u.phone || "", dateOfBirth: u.dateOfBirth ? String(u.dateOfBirth).slice(0, 10) : "", gender: u.gender || "", bloodGroup: u.bloodGroup || "", address: u.address || "", allergies: (u.allergies || []).join(", "), currentMedicines: (u.currentMedicines || []).join(", "), medicalHistory: u.medicalHistory || "", ecName: u.emergencyContact?.name || "", ecPhone: u.emergencyContact?.phone || "", ecRel: u.emergencyContact?.relationship || "" })).catch((e) => setMessage(e.message));
+    api("/profile").then(({ user: u }) => setF({ name: u.name || "", phone: u.phone || "", dateOfBirth: u.dateOfBirth ? String(u.dateOfBirth).slice(0, 10) : "", gender: u.gender || "", bloodGroup: u.bloodGroup || "", address: u.address || "", allergies: (u.allergies || []).join(", "), currentMedicines: (u.currentMedicines || []).join(", "), medicalHistory: u.medicalHistory || "", ecName: u.emergencyContact?.name || "", ecPhone: u.emergencyContact?.phone || "", ecRel: u.emergencyContact?.relationship || "", notifyEmailOnMessage: u.notifyEmailOnMessage !== false })).catch((e) => setMessage(e.message));
   }, []);
   const set = (k: string, v: string) => setF({ ...f, [k]: v });
   async function save(e: any) {
     e.preventDefault();
     try {
-      await api("/profile", { method: "PATCH", body: json({ name: f.name, phone: f.phone, dateOfBirth: f.dateOfBirth, gender: f.gender, bloodGroup: f.bloodGroup, address: f.address, allergies: listFromText(f.allergies), currentMedicines: listFromText(f.currentMedicines), medicalHistory: f.medicalHistory, emergencyContact: { name: f.ecName, phone: f.ecPhone, relationship: f.ecRel } }) });
+      await api("/profile", { method: "PATCH", body: json({ name: f.name, phone: f.phone, dateOfBirth: f.dateOfBirth, gender: f.gender, bloodGroup: f.bloodGroup, address: f.address, allergies: listFromText(f.allergies), currentMedicines: listFromText(f.currentMedicines), medicalHistory: f.medicalHistory, emergencyContact: { name: f.ecName, phone: f.ecPhone, relationship: f.ecRel }, notifyEmailOnMessage: !!f.notifyEmailOnMessage }) });
       setMessage("Health profile saved. Your assigned doctor can see it.");
     } catch (x: any) { setMessage(x.message); }
   }
@@ -203,6 +212,7 @@ function Profile({ api, setMessage }: { api: Api; setMessage: (s: string) => voi
       <label className="full">Allergies (comma separated)<input value={f.allergies} onChange={(e) => set("allergies", e.target.value)} placeholder="e.g. Penicillin, Peanuts" /></label>
       <label className="full">Current medicines (comma separated)<input value={f.currentMedicines} onChange={(e) => set("currentMedicines", e.target.value)} /></label>
       <label className="full">Medical history<textarea value={f.medicalHistory} onChange={(e) => set("medicalHistory", e.target.value)} /></label>
+      <label className="full" style={{ display: "flex", alignItems: "center", gap: 8 }}><input type="checkbox" checked={!!f.notifyEmailOnMessage} onChange={(e) => setF({ ...f, notifyEmailOnMessage: e.target.checked })} /> Email me when a new chat message arrives</label>
       <label>Emergency contact name<input value={f.ecName} onChange={(e) => set("ecName", e.target.value)} /></label>
       <label>Emergency contact phone<input value={f.ecPhone} onChange={(e) => set("ecPhone", e.target.value)} /></label>
       <label>Relationship<input value={f.ecRel} onChange={(e) => set("ecRel", e.target.value)} /></label>

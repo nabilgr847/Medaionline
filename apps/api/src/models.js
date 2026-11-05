@@ -13,6 +13,7 @@ const userSchema = new Schema({
   allergies: [String], currentMedicines: [String], medicalHistory: String,
   emergencyContact: {name:String, phone:String, relationship:String},
   passwordChangedAt: Date, lastLoginAt:Date, lastSeenAt:Date,
+  notifyEmailOnMessage: {type:Boolean, default:true},
   passwordResetHash: {type:String, select:false},
   passwordResetExpires: {type:Date, select:false},
   pendingPassword: {type:String, select:false},
@@ -25,7 +26,7 @@ const userSchema = new Schema({
 
 const fileSchema = new Schema({
   ownerId:{type:Schema.Types.ObjectId, ref:"User", required:true},
-  category:{type:String, enum:["doctor_photo","bmdc_certificate","degree_certificate","identity_document","other_qualification","patient_report","consultation_recording","doctor_signature","report_ai_pdf","report_final_pdf","other"], required:true},
+  category:{type:String, enum:["doctor_photo","bmdc_certificate","degree_certificate","identity_document","other_qualification","patient_report","consultation_recording","doctor_signature","report_ai_pdf","report_final_pdf","chat_attachment","other"], required:true},
   originalName:{type:String, required:true}, storedName:{type:String, required:true}, storageProvider:{type:String,enum:["local","gridfs"],default:"local"},
   mimeType:{type:String, required:true}, size:Number, uploadedBy:{type:Schema.Types.ObjectId, ref:"User"}
 }, {timestamps:true});
@@ -40,6 +41,7 @@ const appointmentSchema = new Schema({
   clinicianNote:String,
   preferredAt:Date,
   proposal:{at:Date,note:{type:String,maxlength:500},proposedAt:Date,status:{type:String,enum:["pending","accepted","declined"]}},
+  pastDiseases:{type:String,default:"",maxlength:2000}, pastInfo:{type:String,default:"",maxlength:4000},
   recordingConsent:{patientAt:{type:Date,default:null},doctorAt:{type:Date,default:null}}
 }, {timestamps:true});
 
@@ -49,7 +51,8 @@ appointmentSchema.index({doctorId:1, scheduledAt:1},{unique:true,partialFilterEx
 const messageSchema = new Schema({
   appointmentId:{type:Schema.Types.ObjectId, ref:"Appointment", required:true},
   senderId:{type:Schema.Types.ObjectId, ref:"User", required:true},
-  body:{type:String, required:true, maxlength:5000}
+  body:{type:String, default:"", maxlength:5000},
+  attachments:[{fileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, originalName:String, mimeType:String, kind:{type:String,enum:["image","audio","video","file"],default:"file"}, size:Number}]
 }, {timestamps:true});
 
 const auditSchema = new Schema({
@@ -85,7 +88,7 @@ const prescriptionSchema = new Schema({
   status:{type:String,enum:["draft","signed","voided"],default:"draft"},
   signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}, signatureImageHash:String, pdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null},
   items:[{brand:String,generic:{type:String,required:true},strength:String,form:String,dose:{type:String,required:true},frequency:{type:String,required:true},duration:{type:String,required:true},instructions:String,medicineId:{type:Schema.Types.ObjectId,ref:"Medicine"}}],
-  notes:String, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String
+  notes:String, advisedTests:String, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String
 },{timestamps:true});
 prescriptionSchema.index({appointmentId:1,createdAt:-1});
 export const Prescription = model("Prescription",prescriptionSchema);
@@ -105,7 +108,7 @@ const medicalReportSchema = new Schema({
   status:{type:String,enum:["uploaded","ai_processing","ai_analysis_completed","pending_doctor_review","under_review","changes_requested","rejected","approved","signed","delivered"],default:"uploaded",index:true},
   docType:{type:String,enum:["lab","imaging","prescription"],default:"lab"}, aiStructured:Schema.Types.Mixed,
   extractedText:String, analysisMode:{type:String,enum:["pdf_text_ocr","image_vision_ocr"]}, findings:[{name:String,value:String,unit:String,normalRange:String,status:String,check:String,key:String,rangeUsed:String,rangeSource:String,conflict:String,deviation:Number,measures:String,meaning:String,source:String,url:String}], urgencyLevel:String, aiExplanation:String, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, finalPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},
-  reviewComment:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date
+  reviewComment:String, doctorExplanation:String, advisedTests:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date
 },{timestamps:true});
 medicalReportSchema.index({doctorId:1,status:1,createdAt:-1});
 const notificationSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},type:{type:String,required:true},title:{type:String,required:true},message:{type:String,required:true},resourceType:String,resourceId:String,count:{type:Number,default:1},readAt:Date},{timestamps:true});
