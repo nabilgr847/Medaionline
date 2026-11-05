@@ -5,6 +5,30 @@ import type { Api } from "./api";
 
 type Msg = { role: "user" | "assistant"; content: string; level?: string; report?: any; file?: string; error?: boolean; preview?: string };
 
+/** Shrink phone photos so AI analysis finishes before server timeout. */
+async function compressImage(file: File, maxSide = 1600, quality = 0.72): Promise<File> {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") return file;
+  if (file.size < 450_000) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg", lastModified: Date.now() });
+  } catch {
+    return file;
+  }
+}
+
+
 const STATUS: Record<string, { label: string; cls: string }> = {
   high: { label: "HIGH", cls: "high" }, low: { label: "LOW", cls: "low" }, normal: { label: "NORMAL", cls: "normal" }, unclear: { label: "CHECK", cls: "unclear" },
 };
@@ -145,16 +169,24 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
     setMsgs((m) => [...m, { role: "user", content: q || "Please analyse this report", file: f?.name }]);
     try {
       if (f) {
-        const fd = new FormData(); fd.append("file", f); fd.append("category", "patient_report");
+        const ready = await compressImage(f);
+        const fd = new FormData(); fd.append("file", ready); fd.append("category", "patient_report");
         const up = await postForm("/files/upload", fd, token);
         const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) });
-        setMsgs((m) => [...m, { role: "assistant", content: "I read your report. Here is a simple summary:", report: an.report, preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : "" }]);
+        setMsgs((m) => [...m, { role: "assistant", content: "I read your report. Here is a simple summary:", report: an.report, preview: ready.type.startsWith("image/") ? URL.createObjectURL(ready) : "" }]);
         if (q) { const d = await api("/ai/health-information", { method: "POST", body: json({ question: q + "\n\n(Context: the patient just uploaded a lab report; summary is shown above.)", history }) }); setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]); }
       } else {
         const d = await api("/ai/health-information", { method: "POST", body: json({ question: q, history }) });
         setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]);
       }
-    } catch (e: any) { setMsgs((m) => [...m, { role: "assistant", content: e.message || "Something went wrong. Please try again.", error: true }]); }
+    } catch (e: any) {
+      const tip = (e?.message || "").toLowerCase().includes("timeout") || (e?.message || "").toLowerCase().includes("timed out")
+        ? " Tip: take a closer, clearer photo of only the result table and try again."
+        : (e?.message || "").toLowerCase().includes("not configured")
+        ? " The hospital AI key may be missing on the server."
+        : " You can also open My reports and use Analyze there, or paste the values as text.";
+      setMsgs((m) => [...m, { role: "assistant", content: (e.message || "Could not analyse this report.") + tip, error: true }]);
+    }
     finally { setBusy(false); taRef.current?.focus(); }
   }
   function mic() {

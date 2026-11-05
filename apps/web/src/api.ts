@@ -10,12 +10,22 @@ export type Api = (path: string, opts?: any) => Promise<any>;
 
 export function makeApi(token: string): Api {
   return async (path, opts = {}) => {
-    const r = await fetch(requireApiUrl() + "/api" + path, {
-      ...opts,
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) { const e: any = new Error(d.error || "Request failed"); e.data = d; e.status = r.status; throw e; }
+    let r: Response;
+    try {
+      r = await fetch(requireApiUrl() + "/api" + path, {
+        ...opts,
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
+      });
+    } catch {
+      throw new Error("Network error. Check your connection and try again.");
+    }
+    const text = await r.text();
+    let d: any = {};
+    try { d = text ? JSON.parse(text) : {}; } catch { d = {}; }
+    if (!r.ok) {
+      const msg = d.error || d.message || (r.status === 413 ? "File is too large." : r.status === 502 || r.status === 504 ? "Server timed out while reading the report. Try a clearer, smaller photo (under 2 MB)." : r.status === 503 ? "AI service is temporarily unavailable. Try again in a minute." : r.status >= 500 ? "Server error while analyzing. Please try again." : "Request failed");
+      const e: any = new Error(msg); e.data = d; e.status = r.status; throw e;
+    }
     return d;
   };
 }
@@ -23,9 +33,18 @@ export const json = (body: any) => JSON.stringify(body);
 
 // Multipart upload (browser sets the boundary header itself).
 export async function postForm(path: string, form: FormData, token = ""): Promise<any> {
-  const r = await fetch(requireApiUrl() + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || "Upload failed");
+  let r: Response;
+  try {
+    r = await fetch(requireApiUrl() + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+  } catch {
+    throw new Error("Network error while uploading. Check your connection.");
+  }
+  const text = await r.text();
+  let d: any = {};
+  try { d = text ? JSON.parse(text) : {}; } catch { d = {}; }
+  if (!r.ok) {
+    throw new Error(d.error || d.message || (r.status === 413 ? "File is too large (max about 12 MB)." : r.status >= 500 ? "Upload server error. Try a smaller JPG photo." : "Upload failed"));
+  }
   return d;
 }
 

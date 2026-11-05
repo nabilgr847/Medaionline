@@ -148,10 +148,24 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
   return <article className="full telecall">
     <h3>Secure online consultation</h3><p className="muted">Peer-to-peer WebRTC call; both people need a modern browser, HTTPS, and camera/microphone permission. Doctor starts the call, patient joins.</p>
     <div className={"callstage" + (callStarted && !minimized ? " callfs" : "")}>
-      <div className="callvideos"><div><video ref={localVideo} autoPlay playsInline muted /><small>Your camera</small></div><div><video ref={remoteVideo} autoPlay playsInline /><small>Other participant</small></div></div>
-      {callStarted && !minimized && <div className="callbar"><button type="button" className={"roundbtn" + (muted ? " off" : "")} onClick={toggleMic} aria-label={muted ? "Unmute microphone" : "Mute microphone"}>{muted ? "🔇" : "🎤"}</button><button type="button" className={"roundbtn" + (camOff ? " off" : "")} onClick={toggleCam} aria-label={camOff ? "Turn camera on" : "Turn camera off"}>{camOff ? "🚫" : "📷"}</button><button type="button" className="roundbtn" onClick={() => setMinimized(true)} aria-label="Minimize call">⤓</button><button type="button" className="roundbtn end" onClick={hangup} aria-label="End call">📞</button></div>}
+      <div className="callvideos">
+        <div className="call-local"><video ref={localVideo} autoPlay playsInline muted /><small>You</small></div>
+        <div className="call-remote"><video ref={remoteVideo} autoPlay playsInline /><small>{connected ? "Connected" : "Connecting…"}</small></div>
+      </div>
+      {callStarted && !minimized && <>
+        <div className="calltop">
+          <span className={"callstatus" + (connected ? " on" : "")}>{connected ? "● Connected" : "○ Connecting…"}</span>
+          <span className="callhint">MedAI video visit</span>
+        </div>
+        <div className="callbar">
+          <button type="button" className={"roundbtn" + (muted ? " off" : "")} onClick={toggleMic} aria-label={muted ? "Unmute" : "Mute"}>{muted ? "🔇" : "🎤"}</button>
+          <button type="button" className={"roundbtn" + (camOff ? " off" : "")} onClick={toggleCam} aria-label={camOff ? "Camera on" : "Camera off"}>{camOff ? "📷" : "📹"}</button>
+          <button type="button" className="roundbtn" onClick={() => setMinimized(true)} aria-label="Minimize">—</button>
+          <button type="button" className="roundbtn end" onClick={hangup} aria-label="End call">📞</button>
+        </div>
+      </>}
     </div>
-    {callStarted && minimized && <div className="row"><button type="button" className="primary" onClick={() => setMinimized(false)}>⛶ Back to full screen</button></div>}
+    {callStarted && minimized && <div className="callmini"><span>{connected ? "● Call connected" : "○ Call in progress"}</span><button type="button" className="primary" onClick={() => setMinimized(false)}>⛶ Full screen</button><button type="button" className="danger" onClick={hangup}>End</button></div>}
     <div className="row"><button className="primary" disabled={busy || connected} onClick={() => startCall("video")}>{myRole === "doctor" ? "Start video call" : "Join video call"}</button><button className="outline" disabled={busy || connected} onClick={() => startCall("audio")}>Audio-only setup</button><button className="danger" onClick={hangup}>End call</button><span className={connected ? "notice" : "muted"}>{connected ? "Connected" : "Not connected"}</span></div>
     <div className="consentbox"><b>Recording consent</b><p className="muted">Only audio is recorded (not video). Do not record unless both people explicitly agree. Saved audio is private to this appointment.</p>
       <div className="row"><button className={consent[myRole] ? "primary" : "outline"} onClick={() => setMyConsent(!consent[myRole])}>{consent[myRole] ? "Withdraw my consent" : "I consent to audio recording"}</button><span className="muted">Patient: {consent.patient ? "consented" : "not consented"} · Doctor: {consent.doctor ? "consented" : "not consented"}</span></div>

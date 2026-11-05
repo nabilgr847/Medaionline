@@ -1171,8 +1171,18 @@ function reportSections(st={},docType="lab",nextText=""){
   return {lead,rest};
 }
 async function callOpenRouter(messages,temperature=0.1){
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages,temperature})});
-  if(!response.ok) throw Object.assign(new Error("AI provider request failed"),{status:502});
+  let response;
+  try{
+    response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages,temperature}),signal:AbortSignal.timeout(55000)});
+  }catch(e){
+    const timed=/timeout|aborted|AbortError/i.test(String(e?.name||e?.message||e));
+    throw Object.assign(new Error(timed?"AI timed out while reading the report. Try a smaller, clearer photo of the result table.":"Could not reach the AI provider. Try again in a minute."),{status:504});
+  }
+  if(!response.ok){
+    let detail=""; try{const j=await response.json();detail=j?.error?.message||j?.message||"";}catch{}
+    const msg=response.status===401||response.status===403?"AI provider key is invalid or missing on the server.":response.status===429?"AI is busy right now. Please try again in a minute.":(detail?("AI error: "+String(detail).slice(0,180)):"AI provider request failed");
+    throw Object.assign(new Error(msg),{status:502});
+  }
   const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
   if(!answer) throw Object.assign(new Error("AI response was empty"),{status:502});
   return String(answer);
@@ -1224,7 +1234,12 @@ router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(asyn
     catch(e){ if(isPdf) throw e; /* images can still be read by the vision model */ }
     if(isPdf&&extracted.length<20) throw Object.assign(new Error("No readable report text found in this PDF. Upload a clearer file or a JPG/PNG photo."),{status:422});
     const docType=classifyDoc({text:extracted,filename:file.originalName,mime:file.mimeType});
-    const imageDataUrl=isPdf?"":`data:${file.mimeType};base64,${bytes.toString("base64")}`;
+    // Large phone photos often time out on free hosts; only attach images under ~1.4MB base64 (~1MB file)
+    let imageDataUrl="";
+    if(!isPdf){
+      if(bytes.length<=1_200_000) imageDataUrl=`data:${file.mimeType};base64,${bytes.toString("base64")}`;
+      else if(extracted.length<30) throw Object.assign(new Error("This photo is too large for AI analysis. Please retake a closer photo of only the result table (under 2 MB) or upload a PDF."),{status:413});
+    }
     const profile=await User.findById(req.user.id).select("dateOfBirth gender");
     let verified={findings:[],stats:{total:0,verified:0,unchecked:0}},urgencyLevel="routine";
     if(docType==="lab"){
@@ -1254,7 +1269,14 @@ router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(asyn
     else {const admins=await User.find({role:"admin",status:"active"}).select("_id");for(const a of admins)await notify(a.id,"report_unassigned","Report needs a doctor",`${req.user.name} uploaded a report but no active doctor is available. Open Reports to assign one.`,"MedicalReport",report.id);}
     await audit(req,"medical_report.ai_completed","MedicalReport",report.id,{docType,findings:verified.stats.total,verified:verified.stats.verified,unchecked:verified.stats.unchecked,doctorAssigned:!!report.doctorId});
     res.status(201).json({report:{id:report.id,originalFileId:String(file._id),status:report.status,docType,urgencyLevel:report.urgencyLevel,findings:report.findings,aiExplanation:report.aiExplanation,aiStructured:structured,aiPdfFileId:report.aiPdfFileId,doctorAssigned:!!report.doctorId,doctorName:doctor?.name||null,nextText},disclaimer:"AI-generated and not doctor-approved. Always compare with your original report."});
-  }catch(e){report.status="uploaded";await report.save();throw e;}
+  }catch(e){
+    report.status="uploaded";
+    await report.save().catch(()=>{});
+    const status=e.status||e.statusCode||500;
+    const msg=e.message||"Could not analyse this report";
+    if(status>=400&&status<600) return res.status(status).json({error:msg});
+    throw e;
+  }
 }));
 router.get("/reports/mine",auth,wrap(async(req,res)=>{
   const filter=req.user.role==="patient"?{patientId:req.user.id}:req.user.role==="doctor"?{doctorId:req.user.id}:{};
