@@ -1,6 +1,7 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import PDFDocument from "pdfkit";
 import fs from "fs";
+import QRCode from "qrcode";
 import { URGENCY_LABEL } from "./reportRules.js";
 
 const BLUE="#087fbd",TEAL="#20a58a",NAVY="#102e49",MUTED="#60788d";
@@ -121,6 +122,15 @@ function signature(doc,buf,label,caption){
   doc.fillColor(NAVY);
 }
 
+function qrBlock(doc,buf){
+  if(!buf)return; ensure(doc,100);doc.moveDown(0.6);const y=doc.y;
+  try{doc.image(buf,48,y,{fit:[78,78]});}catch{return;}
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(NAVY).text("Secure record QR",136,y+16,{width:400,lineBreak:false});
+  doc.font("Helvetica").fontSize(8).fillColor(MUTED).text("Scan to open this record. Works only for a signed-in MedAI doctor or admin.",136,y+31,{width:400});
+  doc.y=y+86;doc.x=48;doc.fillColor(NAVY);
+}
+const qrPng=t=>t?QRCode.toBuffer(String(t),{width:240,margin:1,errorCorrectionLevel:"M"}).catch(()=>null):Promise.resolve(null);
+
 /** Structured lab-report PDF (AI analysis and doctor-approved versions). */
 const ACCENT={"Summary":BLUE,"What stands out":TEAL,"What to do next":"#b26a00","Doctor review":"#17805f","Bangla summary":"#6b5bd6","Tests to do":"#6b5bd6","When to see a doctor":"#c0392b"};
 const FILL={"What to do next":"#fff6e0","Doctor review":"#eaf7f1","When to see a doctor":"#fdf0ee"};
@@ -162,7 +172,8 @@ function topCard(doc,img,pairs){
   rows.forEach(([k,v],i)=>{doc.fillColor(MUTED).font("Helvetica").fontSize(8.5).text(latin(k),x+12,y+10+i*17,{width:92,lineBreak:false});doc.fillColor(NAVY);put(doc,v,x+106,y+10+i*17,{width:w-118,lineBreak:false,height:13,ellipsis:true},"Helvetica-Bold");});
   doc.y=y+Math.max(ch,shown?170:0)+10;doc.x=48;doc.fillColor(NAVY);
 }
-export function makeReportPdf({heading,subtitle,banner,bannerColor="#b26a00",meta=[],urgency,findings=[],stats,explanation,sections=[],leadSections=[],originalImage,showCounts=true,timeline=[],signatureBuffer,signatureCaption,disclaimer,footerNote}){
+export async function makeReportPdf({qrText,heading,subtitle,banner,bannerColor="#b26a00",meta=[],urgency,findings=[],stats,explanation,sections=[],leadSections=[],originalImage,showCounts=true,timeline=[],signatureBuffer,signatureCaption,disclaimer,footerNote}){
+  const qrBuf=await qrPng(qrText);
   const doc=newDoc(heading,subtitle);
   doc.font("Helvetica-Bold").fontSize(21).fillColor(NAVY);put(doc,heading,48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.4);
   if(banner)badge(doc,banner,bannerColor);
@@ -176,6 +187,7 @@ export function makeReportPdf({heading,subtitle,banner,bannerColor="#b26a00",met
     if(stats&&(stats.unchecked||stats.ocrSuspect||stats.conflicts))para(doc,`${stats.unchecked} value(s) could not be auto-verified${stats.ocrSuspect?`, ${stats.ocrSuspect} possible OCR misread`:""}${stats.conflicts?`, ${stats.conflicts} range conflict(s)`:""}. Please compare these with the original report.`,8.5,MUTED);}
   else if(showCounts)para(doc,"No laboratory values could be read from this report.",9.5,MUTED);
   if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature",signatureCaption);
+  qrBlock(doc,qrBuf);
   if(disclaimer){doc.moveDown(0.4);ensure(doc,50);const y=doc.y,h=height(doc,disclaimer,475,8)+14;doc.roundedRect(48,y,499,h,8).fill("#fff6e0");doc.fillColor("#7a4b00").fontSize(8);put(doc,disclaimer,60,y+7,{width:475});}
   return finish(doc,footerNote);
 }
@@ -196,7 +208,8 @@ export function makeTextPdf(heading,lines,signatureBuffer=null,signatureMime="im
 }
 
 /** Signed prescription PDF with a medicine table. */
-export function makePrescriptionPdf({patientName,patientAge,patientSex,clinical,doctorName,bmdc,date,items=[],notes,advisedTests,signatureBuffer,signatureHash,voided=false}){
+export async function makePrescriptionPdf({qrText,patientName,patientAge,patientSex,clinical,doctorName,bmdc,date,items=[],notes,advisedTests,signatureBuffer,signatureHash,voided=false}){
+  const qrBuf=await qrPng(qrText);
   const doc=newDoc("Prescription","Signed prescription");
   doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY);put(doc,"Prescription",48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.5);
   badge(doc,voided?"VOIDED - DO NOT USE":"FINALIZED / DOCTOR-SIGNED",voided?"#b3261e":BLUE);
@@ -222,6 +235,7 @@ export function makePrescriptionPdf({patientName,patientAge,patientSex,clinical,
   if(cl.followUp){h2(doc,"Follow-up");para(doc,cl.followUp);}
   if(notes){h2(doc,"Doctor's notes");para(doc,notes);}
   if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature",`Signed by ${doctorName||""}${date?" - "+date:""}`);
+  qrBlock(doc,qrBuf);
   if(signatureHash){doc.moveDown(0.8);ensure(doc,40);doc.fontSize(7.5).fillColor(MUTED);put(doc,`In-app digital signature (Ed25519). Content hash: ${signatureHash}. This is not a government-issued qualified digital certificate.`,48,doc.y,{width:499});}
   return finish(doc,"MedAI Hospital - Prescription. Take medicines only as directed by your doctor.");
 }

@@ -2,7 +2,7 @@
 // Privacy: this app handles medical data, so ONLY same-origin static app files
 // are cached. API calls, uploads, downloads and anything cross-origin are never
 // touched or stored.
-const CACHE = "medai-shell-v3";
+const CACHE = "medai-shell-v4";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -28,7 +28,10 @@ self.addEventListener("fetch", (e) => {
   // Page loads: network first, fall back to cached shell when offline.
   if (req.mode === "navigate") {
     e.respondWith(
-      fetch(req).catch(() => caches.match("/").then((r) => r || Response.error()))
+      fetch(req).then((res) => {
+        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put("/", copy)); }
+        return res;
+      }).catch(() => caches.match("/").then((r) => r || Response.error()))
     );
     return;
   }
@@ -38,7 +41,7 @@ self.addEventListener("fetch", (e) => {
     caches.match(req).then((hit) => {
       if (hit) return hit;
       return fetch(req).then((res) => {
-        if (res.ok && res.type === "basic") {
+        if (res.ok && res.type === "basic" && !/text\/html/i.test(res.headers.get("content-type") || "")) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }

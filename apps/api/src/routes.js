@@ -18,7 +18,7 @@ import { checkRedFlags } from "./safety.js";
 import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
 import { callAI, parseJsonLoose, pingAI } from "./ai.js";
-import { installV38, cleanClinical, clinicalForSigning } from "./v38.js";
+import { installV38, cleanClinical, clinicalForSigning, makeSecretCode } from "./v38.js";
 import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
@@ -1001,7 +1001,8 @@ router.post("/prescriptions/:id/sign",auth,allow("doctor"),wrap(async(req,res)=>
   rx.status="signed";
   const signatureBytes=await readStoredFileBuffer(uploadDir,signatureFile);
   const patient=await User.findById(rx.patientId).select("name dateOfBirth gender");
-  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",patientAge:ageFromDob(patient?.dateOfBirth),patientSex:normSex(patient?.gender),clinical:clinicalForSigning(rx),doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,advisedTests:rx.advisedTests,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
+  if(!rx.secretAccessCode) rx.secretAccessCode=makeSecretCode(10);
+  const pdfBuffer=await makePrescriptionPdf({qrText:`medai:rx:${rx.secretAccessCode}`,patientName:patient?.name||"Patient",patientAge:ageFromDob(patient?.dateOfBirth),patientSex:normSex(patient?.gender),clinical:clinicalForSigning(rx),doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,advisedTests:rx.advisedTests,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
   const pdfFile=await storeBuffer({ownerId:rx.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"signed-prescription.pdf",mimeType:"application/pdf",buffer:pdfBuffer});rx.pdfFileId=pdfFile._id;
   await rx.save(); await notify(rx.patientId,"prescription_issued","New prescription issued","Your doctor has issued a signed prescription. It is available in your prescription history.","Prescription",rx.id);
   await audit(req,"prescription.signed","Prescription",rx.id,{signatureHash:rx.signatureHash,algorithm:"Ed25519",signatureImageHash:rx.signatureImageHash});
@@ -1316,7 +1317,8 @@ async function analyzeReportFile(req,file,preferredDoctorId){
     const explanation=[structured.summary,...asList(structured.stands_out).map(s=>"- "+s)].filter(Boolean).join("\n");
     report.docType=docType;report.aiStructured=structured;report.extractedText=extracted;report.analysisMode=isPdf?"pdf_text_ocr":"image_vision_ocr";report.findings=verified.findings;report.urgencyLevel=urgencyLevel;report.aiExplanation=explanation;report.status="pending_doctor_review";
     const {lead,rest}=reportSections(structured,docType,nextText);
-    const aiPdf=await makeReportPdf({heading:docType==="prescription"?"Prescription Reading":docType==="imaging"?"Imaging Report Analysis":"Lab Report Analysis",subtitle:"AI-assisted report summary",banner:"AI DRAFT - WAITING FOR DOCTOR APPROVAL",
+    if(!report.secretAccessCode) report.secretAccessCode=makeSecretCode(10);
+    const aiPdf=await makeReportPdf({qrText:`medai:report:${report.secretAccessCode}`,heading:docType==="prescription"?"Prescription Reading":docType==="imaging"?"Imaging Report Analysis":"Lab Report Analysis",subtitle:"AI-assisted report summary",banner:"AI DRAFT - WAITING FOR DOCTOR APPROVAL",
       meta:[["Report type",[DOC_LABEL[docType],structured.report_type].filter(Boolean).join(" - ")],["Report date",structured.report_date],["Facility",structured.facility],["Patient",req.user.name],["Created",new Date().toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"],["Age / sex used",docType==="lab"?[ageFromDob(profile?.dateOfBirth)??"n/a",normSex(profile?.gender)||"n/a"].join(" / "):""]],
       urgency:docType==="lab"?urgencyLevel:null,findings:verified.findings,stats:verified.stats,showCounts:docType==="lab",leadSections:lead,sections:rest,timeline:flowSteps("pending_doctor_review",doctor?.name),
       originalImage:isPdf?null:bytes,originalCaption:"Your original file",
@@ -1371,7 +1373,8 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
     report.status="signed";report.reviewComment=comment||report.reviewComment;report.reviewedAt=new Date();report.signedAt=new Date();report.signatureImageFileId=signature._id;report.signatureImageHash=crypto.createHash("sha256").update(await readStoredFileBuffer(uploadDir,signature)).digest("hex");
     const signatureBytes=await readStoredFileBuffer(uploadDir,signature);
     const patient=await User.findById(report.patientId).select("name");
-    const finalPdf=await makeReportPdf({heading:"Doctor-Reviewed Lab Report",subtitle:"Reviewed and approved by a doctor",banner:"DOCTOR-APPROVED",bannerColor:"#17805f",
+    if(!report.secretAccessCode) report.secretAccessCode=makeSecretCode(10);
+    const finalPdf=await makeReportPdf({qrText:`medai:report:${report.secretAccessCode}`,heading:"Doctor-Reviewed Lab Report",subtitle:"Reviewed and approved by a doctor",banner:"DOCTOR-APPROVED",bannerColor:"#17805f",
       meta:[["Patient",patient?.name||"Patient"],["Reviewing doctor",doctor.name],["BMDC",doctor.doctorProfile?.bmdcNumber||"Not provided"],["Approved",report.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"]],
       urgency:report.docType==="lab"||!report.docType?report.urgencyLevel:null,findings:report.findings,showCounts:!report.docType||report.docType==="lab",
       leadSections:[{heading:"Doctor review",text:report.reviewComment||"Reviewed and approved."},...(report.doctorExplanation?[{heading:"Doctor's description",text:report.doctorExplanation}]:reportSections(report.aiStructured||{summary:report.aiExplanation||""},report.docType||"lab","").lead),...(report.advisedTests?[{heading:"Advised tests",text:report.advisedTests}]:[])],

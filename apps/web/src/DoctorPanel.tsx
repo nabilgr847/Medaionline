@@ -23,10 +23,11 @@ export default function DoctorPanel({ api, token, user, onToken, setMessage }: {
   const badges = useBadges(api, "doctor");
   useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["patients", "My patients"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
+    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["patients", "My patients"], ["scan", "📷 Scan QR"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "requests" && <Requests api={api} setMessage={setMessage} />}
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
+    {tab === "scan" && <div className="grid"><article className="full"><h3>📷 Scan QR</h3><QrScanBox api={api} token={token} setMessage={setMessage} /></article></div>}
     {tab === "patients" && <DoctorPatients api={api} token={token} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
     {tab === "combined" && <DoctorCombined api={api} setMessage={setMessage} />}

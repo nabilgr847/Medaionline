@@ -31,12 +31,19 @@ export function DoctorPatients({ api, token, setMessage }: { api: Api; token: st
             {r.aiPdfFileId && <button className="outline" onClick={() => dl(r.aiPdfFileId, "ai-analysis.pdf")}>AI PDF</button>}
             {r.finalPdfFileId && <button className="outline" onClick={() => dl(r.finalPdfFileId, "approved-report.pdf")}>Approved PDF</button>}
             <SecretQr api={api} kind="report" id={r._id} />
-          </div></div>)}</article>
+          </div>
+          {(r.findings || []).length > 0 && <details><summary>Test results ({r.findings.length})</summary>{r.findings.map((f: any, i: number) => <p key={i} className="muted">{f.name}: {f.value} {f.unit} · <b>{f.status}</b></p>)}</details>}
+          {(r.doctorExplanation || r.aiExplanation) && <details><summary>Analysis</summary><p style={{ whiteSpace: "pre-wrap" }}>{r.doctorExplanation || r.aiExplanation}</p></details>}
+          {r.advisedTests && <p><b>Tests advised:</b> {r.advisedTests}</p>}
+          {r.reviewComment && <p className="muted">Doctor comment: {r.reviewComment}</p>}
+        </div>)}</article>
       <article className="full"><h3>Prescriptions ({rec.prescriptions.length})</h3>
         {rec.prescriptions.length === 0 && <p className="muted">No prescriptions.</p>}
         {rec.prescriptions.map((x: any) => <div className="item" key={x._id}>
           <b>{label(x.status)}</b> · Dr. {x.doctorId?.name || "—"} · <time>{x.signedAt ? "Signed " + fmtDate(x.signedAt) : fmtDate(x.createdAt)}</time>
           {(x.items || []).map((i: any, n: number) => <p key={n} className="muted">• {i.generic} {i.strength} — {i.dose}, {i.frequency}, {i.duration}</p>)}
+          {x.clinical?.diagnosis && <p><b>Diagnosis:</b> {x.clinical.diagnosis}</p>}
+          {x.advisedTests && <p><b>Tests advised:</b> {x.advisedTests}</p>}
           {x.status !== "draft" && <div className="row">{x.pdfFileId && <button className="outline" onClick={() => dl(x.pdfFileId, "prescription.pdf")}>Prescription PDF</button>}<SecretQr api={api} kind="rx" id={x._id} /></div>}
         </div>)}</article>
       <article className="full"><h3>Uploaded files ({rec.files.length})</h3>

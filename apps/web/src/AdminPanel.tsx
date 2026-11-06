@@ -12,12 +12,13 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
   const [tab, setTab] = useTabHistory("doctors", "adminTab");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["diseases", "Diseases"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["scan", "📷 Scan QR"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["diseases", "Diseases"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
     {tab === "schedule" && <AdminSchedules api={api} setMessage={setMessage} />}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
     {tab === "direct" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "temporary" && <TemporaryConsultAdmin api={api} setMessage={setMessage} />}
+    {tab === "scan" && <div className="grid"><article className="full"><h3>📷 Scan QR</h3><QrScanBox api={api} token={token} setMessage={setMessage} /></article></div>}
     {tab === "reports" && <ReportsPanel api={api} token={token} setMessage={setMessage} />}
     {tab === "resets" && <RequestsPanel api={api} setMessage={setMessage} />}
     {tab === "users" && <Users api={api} setMessage={setMessage} />}

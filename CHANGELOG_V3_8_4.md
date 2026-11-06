@@ -9,3 +9,7 @@
 - Signed time is shown ("Signed <date time>") in prescription lists.
 - Fix: TypeScript build error in QrScanner (canvas context type).
 - Patient: old upload-only files show "Analyze now" button; file picker resets after upload.
+- Fix: 'MedAI could not start / Failed to load index-*.js' after deploy: service worker cache v4, shell refreshed on every visit, auto clear-cache + reload when the JS file is missing.
+- QR code is printed in new prescription PDFs, AI report PDFs and doctor-approved report PDFs (only doctor/admin can open it after sign-in).
+- New "📷 Scan QR" tab for Doctor and Admin.
+- Doctor "My patients": also shows test results, analysis text, advised tests, diagnosis for every past report/prescription (any doctor).
