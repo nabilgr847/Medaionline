@@ -1,0 +1,11 @@
+{
+  "name": "medai-hospital-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android (APK) wrapper for MedAI Hospital. Opens the live web app inside a native WebView with camera/mic permissions for video calls.",
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  }
+}

@@ -707,3 +707,19 @@ html.callopen body{position:fixed;left:0;right:0;width:100%}
 .callsheet .sheetbody{touch-action:pan-y;overscroll-behavior:contain}
 .callsheet input,.callsheet textarea,.callsheet select{font-size:16px} /* stops iOS zooming in when typing */
 .callstage.callfs video{max-width:none}
+
+/* ===== V3.7.1 hard full-screen guarantee (WhatsApp/Zoom style) =====
+   Whatever else is in the page, while a call is open the call stage is pinned to the screen
+   and the normal page behind it is hidden, so it can never show up "at the bottom of the page". */
+html.callopen,html.callopen body{height:100%!important;overflow:hidden!important}
+html.callopen body>#root{visibility:hidden!important;height:0!important;overflow:hidden!important}
+html.callopen body>.callstage.callfs{visibility:visible!important}
+body>.callstage.callfs{
+  position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:auto!important;
+  width:100vw!important;height:100vh!important;height:var(--callh,100dvh)!important;
+  z-index:2147483000!important;transform:none!important;margin:0!important;border-radius:0!important;
+}
+body>.callstage.callfs.ringscreen{z-index:2147483100!important}
+body>.callstage.callfs .callvideos{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;margin:0!important;display:block!important}
+body>.callstage.callfs .call-remote{position:absolute!important;inset:0!important;border-radius:0!important}
+body>.callstage.callfs .call-remote video{width:100%!important;height:100%!important;aspect-ratio:auto!important}

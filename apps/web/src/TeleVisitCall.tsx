@@ -269,7 +269,7 @@ export default function TeleVisitCall({ api, token, appointmentId, user, setMess
       screenTrack.current = t; t.onended = () => { if (screenTrack.current === t) stop(); }; setOutgoingVideo(t); setSharing(true);
     } catch {}
   }
-  function enterFs() { try { if (!document.fullscreenElement) (document.documentElement as any).requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {} }
+  function enterFs() { try { if (!document.fullscreenElement) { const el: any = hostRef.current || document.documentElement; (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el, { navigationUI: "hide" })?.catch?.(() => {}); } } catch {} }
   function exitFs() { try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch {} }
   function toggleFullscreen() { if (document.fullscreenElement) exitFs(); else enterFs(); }
   function toggleFit() { fitManual.current = true; setFit(fit === "cover" ? "contain" : "cover"); }

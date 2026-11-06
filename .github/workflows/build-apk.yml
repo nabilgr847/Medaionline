@@ -1,0 +1,55 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Create Android project
+        working-directory: apps/mobile
+        run: |
+          npm install
+          npx cap add android
+          python3 scripts/patch_android.py
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Publish APK as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk MedAI-Hospital.apk
+          gh release delete apk-latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
+          gh release create apk-latest MedAI-Hospital.apk --repo "${{ github.repository }}" \
+            --title "MedAI Hospital Android APK" \
+            --notes "Latest Android build. Opens the live MedAI web app. Download MedAI-Hospital.apk and install."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedAI-Hospital-apk
+          path: MedAI-Hospital.apk

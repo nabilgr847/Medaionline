@@ -1,0 +1,14 @@
+{
+  "appId": "com.medai.hospital",
+  "appName": "MedAI Hospital",
+  "webDir": "www",
+  "server": {
+    "url": "https://medaionline-1.onrender.com",
+    "cleartext": false,
+    "allowNavigation": ["medaionline-1.onrender.com"]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#092b46"
+  }
+}

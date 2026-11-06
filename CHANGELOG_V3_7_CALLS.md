@@ -24,3 +24,13 @@
 
 ## Full-screen fix
 - Call fills the visible screen (visualViewport), page behind locked (no scroll/zoom), pinch/double-tap zoom blocked during call, browser fullscreen requested on tap, remote picture auto fit/fill + manual toggle.
+
+## V3.7.1 – Full-screen guarantee
+- Call stage is forced to position:fixed (viewport-pinned) and the page behind (#root) is hidden while a call is open, so the call can never appear at the bottom of the page.
+- Browser fullscreen now targets the call stage itself.
+- Service worker cache bumped to v2 so installed apps pick up the fix.
+
+## V3.7.2 – Web + Android APK from one codebase
+- apps/mobile: Capacitor Android wrapper that opens the live web app (server.url in capacitor.config.json) with camera/mic permissions.
+- .github/workflows/build-apk.yml: builds the APK on GitHub and publishes it as release "apk-latest" (run from Actions tab or on changes to apps/mobile).
+- Web is unchanged and still deploys on Render. Web updates reach the APK automatically (no rebuild needed).
