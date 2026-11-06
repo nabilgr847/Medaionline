@@ -7,3 +7,5 @@
 - Patient: upload-only button removed. Upload always = upload + AI analysis.
 - New doctor tab "My patients": assigned doctor sees all of a patient's reports, prescriptions, files and appointments.
 - Signed time is shown ("Signed <date time>") in prescription lists.
+- Fix: TypeScript build error in QrScanner (canvas context type).
+- Patient: old upload-only files show "Analyze now" button; file picker resets after upload.
