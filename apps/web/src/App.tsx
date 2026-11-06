@@ -1,4 +1,5 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
+import { AdminRecovery } from "./v38";
 import { useEffect, useState } from "react";
 import { makeApi, json } from "./api";
 import PatientPanel from "./PatientPanel";
@@ -183,4 +184,4 @@ function ResetPassword() {
     {ok && <a className="bannerlink" href="/">Continue</a>}</div></div>;
 }
 
-export default function App() { const q=new URLSearchParams(window.location.search); return q.has("consult") ? <GuestConsultRoom /> : q.has("call") ? <CallPage /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }
+export default function App() { const q=new URLSearchParams(window.location.search); return q.has("recovery") ? <AdminRecovery /> : q.has("consult") ? <GuestConsultRoom /> : q.has("call") ? <CallPage /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }

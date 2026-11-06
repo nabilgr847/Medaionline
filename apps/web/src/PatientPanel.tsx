@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDate, fmtDay, fmtSize, label, listFromText } from "./api";
 import ChatAI, { FindingsList, ReportView } from "./ChatAI";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
+import { PatientCombined } from "./v38";
 import { printRx } from "./print";
+import { useTabHistory } from "./tabHistory";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPicker, DirectMessages } from "./extras";
 
@@ -11,13 +13,14 @@ const CANCELLABLE = ["requested", "awaiting_records", "awaiting_tests", "confirm
 const ACTIVE_CHAT = ["requested", "awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "follow_up_required", "completed"];
 
 export default function PatientPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
-  const [tab, setTab] = useState("appointments");
+  const [tab, setTab] = useTabHistory("appointments", "patientTab");
   const badges = useBadges(api, "patient");
   useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
+    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
+    {tab === "combined" && <PatientCombined api={api} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
     {tab === "messages" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "nearby" && <NearbyCare />}
@@ -176,7 +179,9 @@ function MyPrescriptions({ api, token, user, setMessage }: { api: Api; token: st
       <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>Dr. {rx.doctorId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time></div>
       {rx.status === "voided" && <p className="warn">This prescription was voided{rx.voidReason ? ": " + rx.voidReason : ""}. Do not use it.</p>}
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}{i.instructions ? " (" + i.instructions + ")" : ""}</p>)}
+      {rx.clinical?.diagnosis && <p><b>Diagnosis:</b> {rx.clinical.diagnosis}</p>}
       {rx.advisedTests && <p style={{ whiteSpace: "pre-wrap" }}><b>Advised tests:</b> {rx.advisedTests}</p>}
+      {rx.clinical?.advice && <p style={{ whiteSpace: "pre-wrap" }}><b>Advice:</b> {rx.clinical.advice}</p>}{rx.clinical?.followUp && <p><b>Follow-up:</b> {rx.clinical.followUp}</p>}
       {rx.notes && <p className="muted">Notes: {rx.notes}</p>}
       <div className="row"><button className="outline" onClick={() => verify(rx._id)}>🔏 Verify signature</button><button className="outline" onClick={() => printRx(rx, user.name)}>🖨️ Print</button>{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>⬇️ Download signed PDF</button>}</div>
       {check[rx._id] && <p className="notice">{check[rx._id]}</p>}

@@ -17,6 +17,7 @@ import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
 import { checkRedFlags } from "./safety.js";
 import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
+import { installV38, cleanClinical, clinicalForSigning } from "./v38.js";
 import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
@@ -81,6 +82,7 @@ async function saveDoctorDocs(userId,files,body){
 function prescriptionCanonical(rx){
   const payload={id:String(rx._id),appointmentId:String(rx.appointmentId),patientId:String(rx.patientId),doctorId:String(rx.doctorId?._id||rx.doctorId),signerName:rx.signerName,signerBmdc:rx.signerBmdc,signedAt:rx.signedAt.toISOString(),items:rx.items.map(x=>({brand:x.brand,generic:x.generic,strength:x.strength,form:x.form,dose:x.dose,frequency:x.frequency,duration:x.duration,instructions:x.instructions})),notes:rx.notes||""};
   if(rx.advisedTests) payload.advisedTests=String(rx.advisedTests);
+  const _cl=clinicalForSigning(rx); if(_cl) payload.clinical=_cl;
   // Preserve compatibility with prescriptions signed before image snapshots existed.
   if(rx.signatureImageHash||rx.signatureImageFileId){payload.signatureImageFileId=String(rx.signatureImageFileId||"");payload.signatureImageHash=String(rx.signatureImageHash||"");}
   return JSON.stringify(payload);
@@ -773,35 +775,7 @@ router.post("/ai/chats",auth,wrap(async(req,res)=>{const messages=cleanMsgs(req.
 router.put("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});const chat=await ChatSession.findOneAndUpdate({_id:req.params.id,userId:req.user.id},{$set:{messages:cleanMsgs(req.body.messages)}},{new:true});if(!chat)return res.status(404).json({error:"Chat not found"});res.json({chat:{_id:chat.id,title:chat.title,updatedAt:chat.updatedAt}});}));
 router.delete("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});await ChatSession.deleteOne({_id:req.params.id,userId:req.user.id});res.json({ok:true});}));
 
-// Doctor-only: catalogue-grounded medicine ideas. The doctor decides; doses are never suggested here.
-router.post("/ai/medicine-suggestions",auth,allow("doctor"),aiLimiter,wrap(async(req,res)=>{
-  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
-  const diagnosis=String(req.body.diagnosis||"").trim();
-  if(diagnosis.length<3||diagnosis.length>600) return res.status(400).json({error:"Describe the diagnosis or problem in 3-600 characters"});
-  let appt=null,rep=null;
-  if(req.body.reportId&&mongoose.isValidObjectId(req.body.reportId)) rep=await MedicalReport.findOne({_id:req.body.reportId,doctorId:req.user.id});
-  else appt=await Appointment.findOne({_id:req.body.appointmentId,doctorId:req.user.id,status:{$in:PRESCRIBE_STATUSES}});
-  if(!appt&&!rep) return res.status(403).json({error:"Open one of your active appointments or assigned reports first"});
-  const patient=await User.findById((appt||rep).patientId).select("dateOfBirth gender allergies currentMedicines");
-  const allergies=(patient?.allergies||[]).map(x=>String(x).toLowerCase()),current=(patient?.currentMedicines||[]).map(x=>String(x).toLowerCase());
-  const ctx={diagnosis,ageYears:ageFromDob(patient?.dateOfBirth),sex:normSex(patient?.gender),allergies:patient?.allergies||[],currentMedicines:patient?.currentMedicines||[]};
-  const system='You assist a licensed Bangladeshi doctor. Suggest up to 5 commonly used GENERIC (INN) medicines for the stated problem as options the doctor may consider. Reply ONLY with JSON: {"suggestions":[{"generic":"","class":"","reason":"one short sentence","cautions":"key cautions, incl. conflict with the patient allergies or current medicines if any"}]}. Never give doses, durations or brand names. Never claim certainty; the doctor decides. Skip any medicine that matches a listed allergy.';
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:JSON.stringify(ctx)}],temperature:0.2,max_tokens:900})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed"});
-  const data=await response.json(); const raw=String(data.choices?.[0]?.message?.content||"");
-  let list=[]; try{list=JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0]||"{}").suggestions||[];}catch{list=[];}
-  const out=[];
-  for(const x of list.slice(0,5)){
-    const generic=String(x.generic||"").trim().slice(0,80); if(generic.length<3) continue;
-    const brands=await Medicine.find({active:true,reviewStatus:"verified",generic:new RegExp(escapeRegex(generic.split(/[ ,(]/)[0]),"i")}).limit(6).select("brand generic strength form manufacturer");
-    const lower=generic.toLowerCase();
-    out.push({generic,class:String(x.class||"").slice(0,80),reason:String(x.reason||"").slice(0,240),cautions:String(x.cautions||"").slice(0,300),
-      allergyConflict:allergies.some(a=>a&&(lower.includes(a)||a.includes(lower))),
-      alreadyTaking:current.some(c=>c&&(c.includes(lower)||lower.includes(c))),brands});
-  }
-  await audit(req,"ai.medicine_suggestions",rep?"MedicalReport":"Appointment",String((rep||appt)._id),{count:out.length});
-  res.json({suggestions:out,disclaimer:"AI suggestions are options for the treating doctor only, not a prescription. Check the patient's history, allergies and current medicines yourself, and enter doses yourself."});
-}));
+// AI medicine + test suggestions now live in v38.js (installV38).
 
 router.get("/admin/audit",auth,allow("admin"),wrap(async(req,res)=>{
   const events=await AuditEvent.find().sort({createdAt:-1}).limit(100).populate("actorId","name email role");
@@ -953,7 +927,7 @@ router.post("/appointments/:id/prescriptions",auth,allow("doctor"),wrap(async(re
   if(!appt||String(appt.doctorId)!==String(req.user.id)) return res.status(403).json({error:"Only the assigned doctor can create a prescription"});
   if(!PRESCRIBE_STATUSES.includes(appt.status)) return res.status(409).json({error:"Confirm the appointment before prescribing"});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  const rx=await Prescription.create({appointmentId:appt.id,patientId:appt.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000)});
+  const rx=await Prescription.create({appointmentId:appt.id,patientId:appt.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000),clinical:cleanClinical(req.body.clinical)});
   await audit(req,"prescription.draft_created","Prescription",rx.id); res.status(201).json({prescription:rx});
 }));
 router.post("/reports/:id/prescriptions",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -962,7 +936,7 @@ router.post("/reports/:id/prescriptions",auth,allow("doctor"),wrap(async(req,res
   if(!rep) return res.status(403).json({error:"Only the assigned doctor can prescribe from this report"});
   if(!["approved","signed","delivered"].includes(rep.status)) return res.status(409).json({error:"Approve the report first, then write the prescription"});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  const rx=await Prescription.create({reportId:rep.id,patientId:rep.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000)});
+  const rx=await Prescription.create({reportId:rep.id,patientId:rep.patientId,doctorId:req.user.id,items:c.items,notes:String(req.body.notes||"").slice(0,4000),advisedTests:String(req.body.advisedTests||"").slice(0,2000),clinical:cleanClinical(req.body.clinical)});
   await audit(req,"prescription.draft_created_from_report","Prescription",rx.id); res.status(201).json({prescription:rx});
 }));
 router.patch("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -970,7 +944,7 @@ router.patch("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
   if(!rx||String(rx.doctorId)!==String(req.user.id)) return res.status(403).json({error:"Only the prescribing doctor can edit this prescription"});
   if(rx.status!=="draft") return res.status(409).json({error:"Signed prescriptions cannot be edited. Void it and write a new one."});
   const c=cleanRxItems(req.body.items); if(c.error) return res.status(400).json({error:c.error});
-  rx.items=c.items; rx.notes=String(req.body.notes||"").slice(0,4000); rx.advisedTests=String(req.body.advisedTests||"").slice(0,2000); await rx.save();
+  rx.items=c.items; rx.notes=String(req.body.notes||"").slice(0,4000); rx.advisedTests=String(req.body.advisedTests||"").slice(0,2000); rx.clinical=cleanClinical(req.body.clinical); await rx.save();
   await audit(req,"prescription.draft_updated","Prescription",rx.id); res.json({prescription:rx});
 }));
 router.delete("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
@@ -998,8 +972,8 @@ router.post("/prescriptions/:id/sign",auth,allow("doctor"),wrap(async(req,res)=>
   rx.publicKeyFingerprint=crypto.createHash("sha256").update(config.signingPublicKey).digest("hex");
   rx.status="signed";
   const signatureBytes=await readStoredFileBuffer(uploadDir,signatureFile);
-  const patient=await User.findById(rx.patientId).select("name");
-  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,advisedTests:rx.advisedTests,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
+  const patient=await User.findById(rx.patientId).select("name dateOfBirth gender");
+  const pdfBuffer=await makePrescriptionPdf({patientName:patient?.name||"Patient",patientAge:ageFromDob(patient?.dateOfBirth),patientSex:normSex(patient?.gender),clinical:clinicalForSigning(rx),doctorName:rx.signerName,bmdc:rx.signerBmdc,date:rx.signedAt.toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)",items:rx.items,notes:rx.notes,advisedTests:rx.advisedTests,signatureBuffer:signatureBytes,signatureHash:rx.signatureHash});
   const pdfFile=await storeBuffer({ownerId:rx.patientId,uploadedBy:req.user.id,category:"report_final_pdf",originalName:"signed-prescription.pdf",mimeType:"application/pdf",buffer:pdfBuffer});rx.pdfFileId=pdfFile._id;
   await rx.save(); await notify(rx.patientId,"prescription_issued","New prescription issued","Your doctor has issued a signed prescription. It is available in your prescription history.","Prescription",rx.id);
   await audit(req,"prescription.signed","Prescription",rx.id,{signatureHash:rx.signatureHash,algorithm:"Ed25519",signatureImageHash:rx.signatureImageHash});
@@ -1691,5 +1665,7 @@ router.get("/admin/recent-signups",auth,allow("admin"),wrap(async(_req,res)=>{
   const found=await User.find({role:{$in:["patient","doctor"]}}).sort({createdAt:-1}).limit(30).select("name email contactEmail phone role status createdAt +pendingPassword");
   const users=found.map(u=>{const o=u.toObject();o.requestedPassword=u.status==="pending_approval"?true:undefined;delete o.pendingPassword;return o;});res.json({users});
 }));
+
+installV38(router,{notify,ACCESS:DOCTOR_ACCESS_STATUSES,PRESCRIBE:PRESCRIBE_STATUSES,sendMailSafe});
 
 export default router;

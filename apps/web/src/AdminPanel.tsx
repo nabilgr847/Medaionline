@@ -1,14 +1,16 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
+import { AdminSystem } from "./v38";
 import { useEffect, useState } from "react";
 import { AdminConversations, DirectMessages, TemporaryConsultAdmin } from "./extras";
 import { Api, json, downloadFile, fmtDate, fmtDay, label, parseCsv } from "./api";
 import { useBadges, Tabs, ChangePassword } from "./common";
+import { useTabHistory } from "./tabHistory";
 
 export default function AdminPanel({ api, user, token, onToken, setMessage }: { api: Api; user: any; token: string; onToken: (t: string) => void; setMessage: (s: string) => void }) {
-  const [tab, setTab] = useState("doctors");
+  const [tab, setTab] = useTabHistory("doctors", "adminTab");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
     {tab === "schedule" && <AdminSchedules api={api} setMessage={setMessage} />}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
@@ -22,6 +24,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
     {tab === "import" && <ImportMedicines api={api} setMessage={setMessage} />}
     {tab === "specialties" && <SpecialtiesEditor api={api} setMessage={setMessage} />}
     {tab === "banner" && <BannerEditor api={api} setMessage={setMessage} />}
+    {tab === "system" && <AdminSystem api={api} setMessage={setMessage} />}
     {tab === "security" && <Security api={api} onToken={onToken} setMessage={setMessage} />}
   </div>;
 }

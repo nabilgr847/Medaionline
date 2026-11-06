@@ -53,7 +53,15 @@ export async function postForm(path: string, form: FormData, token = ""): Promis
 export async function downloadFile(token: string, id: string, name: string): Promise<void> {
   const r = await fetch(`${requireApiUrl()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error("Could not download the file");
-  const url = URL.createObjectURL(await r.blob());
+  const blob = await r.blob();
+  // Android app (APK): WebView cannot save blob downloads, so hand the file to the native side.
+  const nat = (window as any).MedAIAndroid;
+  if (nat && typeof nat.saveBase64 === "function") {
+    const b64: string = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1] || ""); fr.onerror = () => rej(new Error("Could not read the file")); fr.readAsDataURL(blob); });
+    nat.saveBase64(name || "file", blob.type || "application/octet-stream", b64);
+    return;
+  }
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);

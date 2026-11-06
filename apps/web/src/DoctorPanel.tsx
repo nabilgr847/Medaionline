@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { Api, json, downloadFile, postForm, fmtDate, fmtDay, fmtSize, label } from "./api";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
+import { DoctorCombined } from "./v38";
+import { useTabHistory } from "./tabHistory";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPhoto, DirectMessages } from "./extras";
 
@@ -14,15 +16,16 @@ const NEXT: [string, string][] = [["waiting_room", "Waiting room"], ["in_progres
 const emptyItem = () => ({ brand: "", generic: "", strength: "", form: "Tablet", dose: "", frequency: "", duration: "", instructions: "", medicineId: "" });
 
 export default function DoctorPanel({ api, token, user, onToken, setMessage }: { api: Api; token: string; user: any; onToken: (t: string) => void; setMessage: (s: string) => void }) {
-  const [tab, setTab] = useState("appointments");
+  const [tab, setTab] = useTabHistory("appointments", "doctorTab");
   const badges = useBadges(api, "doctor");
   useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
+    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "requests" && <Requests api={api} setMessage={setMessage} />}
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
+    {tab === "combined" && <DoctorCombined api={api} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
     {tab === "messages" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "profile" && <DoctorProfile api={api} token={token} onToken={onToken} setMessage={setMessage} />}
@@ -130,19 +133,29 @@ function PastContext({ api, appointmentId, setMessage, onUseTest }: { api: Api; 
   </div>;
 }
 
-function AiSuggest({ api, appointmentId, reportId, onUse, setMessage }: { api: Api; appointmentId?: string; reportId?: string; onUse: (item: any) => void; setMessage: (s: string) => void }) {
+function AiSuggest({ api, appointmentId, reportId, onUse, onTest, onField, setMessage }: { api: Api; appointmentId?: string; reportId?: string; onUse: (item: any) => void; onTest: (line: string) => void; onField: (k: string, v: string) => void; setMessage: (s: string) => void }) {
   const [dx, setDx] = useState(""); const [busy, setBusy] = useState(false); const [res, setRes] = useState<any>(null);
   async function run() { if (!appointmentId && !reportId) { setMessage("Save the prescription from an appointment or report first."); return; } setBusy(true); setRes(null); try { setRes(await api("/ai/medicine-suggestions", { method: "POST", body: json({ diagnosis: dx, appointmentId, reportId }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
   const use = (s: any, b?: any) => onUse({ ...emptyItem(), generic: b?.generic || s.generic, brand: b?.brand || "", strength: b?.strength || "", form: b?.form || "Tablet", medicineId: b?._id || "" });
-  return <div className="aisugg"><b>✨ AI medicine ideas <span className="muted">(for your review only)</span></b>
-    <div className="row"><input value={dx} onChange={(e) => setDx(e.target.value)} placeholder="Diagnosis / problem, e.g. acute pharyngitis" /><button type="button" className="outline" disabled={busy || dx.trim().length < 3} onClick={run}>{busy ? "Thinking…" : "Suggest"}</button></div>
-    {res && <>{res.suggestions.length === 0 && <p className="muted">No suggestions returned. Try a clearer diagnosis.</p>}
+  const PRI: Record<string, string> = { urgent: "🔴", soon: "🟠", routine: "🟢" };
+  return <div className="aisugg"><b>✨ AI auto-suggest: medicines + tests <span className="muted">(for your review only)</span></b>
+    <p className="muted">AI reads the complaints, past history and old tests by itself. You may also type your own diagnosis to guide it.</p>
+    <div className="row"><input value={dx} onChange={(e) => setDx(e.target.value)} placeholder="Optional: your diagnosis, e.g. acute pharyngitis" /><button type="button" className="primary" disabled={busy} onClick={run}>{busy ? "Thinking…" : "✨ Suggest now"}</button></div>
+    {res && <>
+      {res.workingDiagnosis && <div className="sgitem"><b>Working diagnosis:</b> {res.workingDiagnosis} <button type="button" className="suggestion" onClick={() => onField("diagnosis", res.workingDiagnosis)}>Use as diagnosis</button></div>}
+      <b>💊 Medicines</b>
+      {res.suggestions.length === 0 && <p className="muted">No medicine ideas returned. Add a diagnosis and try again.</p>}
       {res.suggestions.map((s: any, i: number) => <div key={i} className={"sgitem" + (s.allergyConflict ? " bad" : "")}>
         <b>{s.generic}</b> <span className="muted">{s.class}</span>
         {s.allergyConflict && <p className="warn">⚠️ Matches a recorded allergy. Do not prescribe.</p>}{s.alreadyTaking && <p className="warn">Patient already lists this medicine.</p>}
         <p>{s.reason}</p>{s.cautions && <p className="muted">Cautions: {s.cautions}</p>}
         <div className="row">{s.brands.slice(0, 5).map((b: any) => <button type="button" key={b._id} className="suggestion" disabled={s.allergyConflict} onClick={() => use(s, b)}>+ {b.brand} {b.strength || ""}</button>)}
           {s.brands.length === 0 && <button type="button" className="outline" disabled={s.allergyConflict} onClick={() => use(s)}>+ Add generic only</button>}</div></div>)}
+      <b>🧪 Suggested tests</b>
+      {(res.tests || []).length === 0 && <p className="muted">No tests suggested.</p>}
+      {(res.tests || []).map((t: any, i: number) => <div key={i} className="sgitem"><b>{PRI[t.priority] || ""} {t.name}</b> {t.advisedBefore && <span className="muted">(advised before)</span>}<p className="muted">{t.reason}</p><button type="button" className="suggestion" onClick={() => onTest(t.name)}>+ Add to advised tests</button></div>)}
+      {(res.tests || []).length > 1 && <button type="button" className="outline" onClick={() => onTest((res.tests as any[]).map((t) => t.name).join("\n"))}>+ Add all tests</button>}
+      {(res.advice || res.followUp) && <div className="sgitem">{res.advice && <><b>Advice:</b> <span style={{ whiteSpace: "pre-wrap" }}>{res.advice}</span> <button type="button" className="suggestion" onClick={() => onField("advice", res.advice)}>Use advice</button></>}{res.followUp && <p><b>Follow-up:</b> {res.followUp} <button type="button" className="suggestion" onClick={() => onField("followUp", res.followUp)}>Use</button></p>}</div>}
       <p className="muted">{res.disclaimer}</p></>}
   </div>;
 }
@@ -150,6 +163,11 @@ function AiSuggest({ api, appointmentId, reportId, onUse, setMessage }: { api: A
 function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { api: Api; appointmentId?: string; reportId?: string; rx?: any; onSaved: () => void; setMessage: (s: string) => void }) {
   const [items, setItems] = useState<any[]>(rx ? rx.items.map((i: any) => ({ ...emptyItem(), ...i, medicineId: i.medicineId || "" })) : [emptyItem()]);
   const [notes, setNotes] = useState<string>(rx?.notes || ""); const [tests, setTests] = useState<string>(rx?.advisedTests || ""); const [sugg, setSugg] = useState<{ i: number; list: any[] }>({ i: -1, list: [] });
+  const [cl, setCl] = useState<Record<string, string>>({ complaints: "", history: "", examination: "", vitals: "", diagnosis: "", pastTests: "", advice: "", followUp: "", ...(rx?.clinical || {}) });
+  const setC = (k: string, v: string) => setCl((c) => ({ ...c, [k]: v }));
+  const appId = appointmentId || rx?.appointmentId?._id || rx?.appointmentId; const repId = reportId || rx?.reportId;
+  useEffect(() => { if (rx?.clinical && Object.values(rx.clinical).some(Boolean)) return; const q = repId ? `reportId=${repId}` : appId ? `appointmentId=${appId}` : ""; if (!q) return; api(`/rx-prefill?${q}`).then((d: any) => setCl((c) => ({ ...c, complaints: c.complaints || d.prefill?.complaints || "", history: c.history || d.prefill?.history || "", pastTests: c.pastTests || d.prefill?.pastTests || "" }))).catch(() => {}); }, []);
+  const addTest = (line: string) => setTests((t) => (t ? t + "\n" + line : line));
   const upd = (i: number, k: string, v: string) => setItems(items.map((x, n) => (n === i ? { ...x, [k]: v } : x)));
   async function search(i: number, v: string) {
     setItems(items.map((x, n) => (n === i ? { ...x, generic: v, medicineId: "" } : x)));
@@ -160,7 +178,7 @@ function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { a
   async function save(e: any) {
     e.preventDefault();
     try {
-      const body = json({ items: items.map((x) => ({ ...x, medicineId: x.medicineId || undefined })), notes, advisedTests: tests });
+      const body = json({ items: items.map((x) => ({ ...x, medicineId: x.medicineId || undefined })), notes, advisedTests: tests, clinical: cl });
       if (rx) await api(`/prescriptions/${rx._id}`, { method: "PATCH", body }); else if (reportId) await api(`/reports/${reportId}/prescriptions`, { method: "POST", body }); else await api(`/appointments/${appointmentId}/prescriptions`, { method: "POST", body });
       onSaved();
     } catch (x: any) { setMessage(x.message); }
@@ -168,7 +186,14 @@ function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { a
   return <form onSubmit={save} className="record">
     <p className="muted">Doses are entered by you. Check the patient’s allergies, past history and old tests in “Patient record” before prescribing.</p>
     {appointmentId && <PastContext api={api} appointmentId={appointmentId} setMessage={setMessage} onUseTest={(line) => setTests((t) => (t ? t + "\n" + line : line))} />}
-    <AiSuggest api={api} reportId={reportId || rx?.reportId} appointmentId={appointmentId || rx?.appointmentId?._id || rx?.appointmentId} onUse={(m) => setItems((cur) => (cur.length === 1 && !cur[0].generic ? [m] : [...cur, m]))} setMessage={setMessage} />
+    <AiSuggest api={api} reportId={reportId || rx?.reportId} appointmentId={appointmentId || rx?.appointmentId?._id || rx?.appointmentId} onUse={(m) => setItems((cur) => (cur.length === 1 && !cur[0].generic ? [m] : [...cur, m]))} onTest={addTest} onField={setC} setMessage={setMessage} />
+    <div className="aisugg"><b>🩺 Clinical record <span className="muted">(printed on the prescription)</span></b>
+      <label>Chief complaints<textarea rows={2} value={cl.complaints} onChange={(e) => setC("complaints", e.target.value)} /></label>
+      <label>Past history (diseases, surgery, family, habits)<textarea rows={3} value={cl.history} onChange={(e) => setC("history", e.target.value)} /></label>
+      <label>Past tests / old reports<textarea rows={3} value={cl.pastTests} onChange={(e) => setC("pastTests", e.target.value)} /></label>
+      <div className="cols"><label>Examination (O/E)<textarea rows={2} value={cl.examination} onChange={(e) => setC("examination", e.target.value)} /></label><label>Vitals (BP, pulse, temp, weight)<textarea rows={2} value={cl.vitals} onChange={(e) => setC("vitals", e.target.value)} /></label></div>
+      <label>Diagnosis<input value={cl.diagnosis} onChange={(e) => setC("diagnosis", e.target.value)} /></label></div>
+    <h3 className="rxmark" style={{ margin: "6px 0", color: "#087fbd", fontStyle: "italic" }}>Rx</h3>
     {items.map((it, i) => <div className="item" key={i}>
       <label>Medicine (brand or generic name)<input value={it.generic} onChange={(e) => search(i, e.target.value)} placeholder="Type at least 2 letters" required />
         {it.brand && <span className="muted">Selected: {it.brand}</span>}</label>
@@ -185,6 +210,8 @@ function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { a
     </div>)}
     <button type="button" className="outline" onClick={() => setItems([...items, emptyItem()])}>+ Add another medicine</button>
     <label>Advised tests (one per line, e.g. CBC, Blood sugar)<textarea value={tests} onChange={(e) => setTests(e.target.value)} placeholder="Tests the patient should get done…" /></label>
+    <label>Advice (diet, rest, lifestyle)<textarea value={cl.advice} onChange={(e) => setC("advice", e.target.value)} /></label>
+    <label>Follow-up (when to come back / warning signs)<textarea value={cl.followUp} onChange={(e) => setC("followUp", e.target.value)} /></label>
     <label>Notes for patient<textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
     <button className="primary">{rx ? "Save changes" : "Save prescription draft"}</button>
   </form>;

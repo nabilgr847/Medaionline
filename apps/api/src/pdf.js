@@ -191,11 +191,14 @@ export function makeTextPdf(heading,lines,signatureBuffer=null,signatureMime="im
 }
 
 /** Signed prescription PDF with a medicine table. */
-export function makePrescriptionPdf({patientName,doctorName,bmdc,date,items=[],notes,advisedTests,signatureBuffer,signatureHash,voided=false}){
+export function makePrescriptionPdf({patientName,patientAge,patientSex,clinical,doctorName,bmdc,date,items=[],notes,advisedTests,signatureBuffer,signatureHash,voided=false}){
   const doc=newDoc("Prescription","Signed prescription");
   doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY);put(doc,"Prescription",48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.5);
   badge(doc,voided?"VOIDED - DO NOT USE":"FINALIZED / DOCTOR-SIGNED",voided?"#b3261e":BLUE);
-  metaGrid(doc,[["Patient",patientName],["Doctor",doctorName],["BMDC",bmdc||"Not provided"],["Date",date]]);
+  metaGrid(doc,[["Patient",patientName],["Age / Sex",[patientAge!=null&&patientAge!==""?patientAge+" y":"",patientSex||""].filter(Boolean).join(" / ")||"-"],["Doctor",doctorName],["BMDC",bmdc||"Not provided"],["Date",date]]);
+  const cl=clinical||{};
+  [["Chief complaints","complaints"],["Past history","history"],["Past tests / reports","pastTests"],["Examination","examination"],["Vitals","vitals"],["Diagnosis","diagnosis"]].forEach(([t,k])=>{if(cl[k]){h2(doc,t);para(doc,cl[k]);}});
+  ensure(doc,60);doc.moveDown(0.4);doc.font("Helvetica-BoldOblique").fontSize(26).fillColor(BLUE).text("Rx",48,doc.y);doc.x=48;doc.moveDown(0.2);
   h2(doc,"Medicines");
   const cols=[[48,22,"#"],[70,150,"Medicine"],[220,70,"Dose"],[290,80,"Frequency"],[370,65,"Duration"],[435,112,"Instructions"]];
   const head=()=>{const y=doc.y;doc.rect(48,y,499,20).fill(BLUE);doc.fillColor("#fff").font("Helvetica-Bold").fontSize(8.5);cols.forEach(([x,w,t])=>doc.text(t,x+5,y+6,{width:w-6,lineBreak:false}));doc.y=y+20;doc.x=48;};
@@ -210,6 +213,8 @@ export function makePrescriptionPdf({patientName,doctorName,bmdc,date,items=[],n
     doc.moveTo(48,y+h).lineTo(547,y+h).lineWidth(0.4).strokeColor("#dce8ef").stroke();doc.y=y+h;doc.x=48;
   });
   if(advisedTests){h2(doc,"Advised tests");para(doc,advisedTests);}
+  if(cl.advice){h2(doc,"Advice");para(doc,cl.advice);}
+  if(cl.followUp){h2(doc,"Follow-up");para(doc,cl.followUp);}
   if(notes){h2(doc,"Doctor's notes");para(doc,notes);}
   if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature","");
   if(signatureHash){doc.moveDown(0.8);ensure(doc,40);doc.fontSize(7.5).fillColor(MUTED);put(doc,`In-app digital signature (Ed25519). Content hash: ${signatureHash}. This is not a government-issued qualified digital certificate.`,48,doc.y,{width:499});}

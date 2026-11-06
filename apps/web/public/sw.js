@@ -2,7 +2,7 @@
 // Privacy: this app handles medical data, so ONLY same-origin static app files
 // are cached. API calls, uploads, downloads and anything cross-origin are never
 // touched or stored.
-const CACHE = "medai-shell-v2";
+const CACHE = "medai-shell-v3";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

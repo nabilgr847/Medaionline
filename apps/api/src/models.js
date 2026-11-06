@@ -126,10 +126,22 @@ const prescriptionSchema = new Schema({
   status:{type:String,enum:["draft","signed","voided"],default:"draft"},
   signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}, signatureImageHash:String, pdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null},
   items:[{brand:String,generic:{type:String,required:true},strength:String,form:String,dose:{type:String,required:true},frequency:{type:String,required:true},duration:{type:String,required:true},instructions:String,medicineId:{type:Schema.Types.ObjectId,ref:"Medicine"}}],
-  notes:String, advisedTests:String, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String
+  notes:String, advisedTests:String, clinical:{complaints:String,history:String,examination:String,vitals:String,diagnosis:String,pastTests:String,advice:String,followUp:String}, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String
 },{timestamps:true});
 prescriptionSchema.index({appointmentId:1,createdAt:-1});
 export const Prescription = model("Prescription",prescriptionSchema);
+// V3.8: combined analysis of several reports (trend + possible conditions), reviewed by a doctor.
+const multiAnalysisSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  doctorId:{type:Schema.Types.ObjectId,ref:"User",default:null,index:true},
+  requestedBy:{type:Schema.Types.ObjectId,ref:"User",required:true}, requestedByRole:{type:String,enum:["patient","doctor"],required:true},
+  reportIds:[{type:Schema.Types.ObjectId,ref:"MedicalReport"}],
+  status:{type:String,enum:["pending_doctor_review","approved","rejected"],default:"pending_doctor_review",index:true},
+  trends:Schema.Types.Mixed, ai:Schema.Types.Mixed,
+  doctorFinal:{summary:String,conditions:[{name:String,likelihood:String,note:String}],tests:[String],specialty:String,advice:String,urgency:String},
+  doctorNote:String, reviewedAt:Date
+},{timestamps:true});
+export const MultiAnalysis = model("MultiAnalysis",multiAnalysisSchema);
 const callSignalSchema = new Schema({
   appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",required:true,index:true},
   senderId:{type:Schema.Types.ObjectId,ref:"User",required:true},

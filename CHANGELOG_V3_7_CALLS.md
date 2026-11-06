@@ -34,3 +34,10 @@
 - apps/mobile: Capacitor Android wrapper that opens the live web app (server.url in capacitor.config.json) with camera/mic permissions.
 - .github/workflows/build-apk.yml: builds the APK on GitHub and publishes it as release "apk-latest" (run from Actions tab or on changes to apps/mobile).
 - Web is unchanged and still deploys on Render. Web updates reach the APK automatically (no rebuild needed).
+
+## V3.7.4 – Android app fixes
+- Downloads in the APK: prescription PDF, reports, chat photos/files are saved to the phone's Downloads folder and opened (native bridge window.MedAIAndroid.saveBase64). Browsers keep the normal download.
+- Print prescription in the APK opens the Android print dialog (print or Save as PDF) (window.MedAIAndroid.printHtml).
+- Back button: dashboard tabs are now browser-history steps (apps/web/src/tabHistory.ts), so Back returns to the previous tab in the APK and in browsers.
+- App icon: the MedAI website logo (cross + heart + pulse) on white, adaptive + legacy icons pre-rendered in apps/mobile/icons (no image library needed in the build).
+- apps/mobile/native/MainActivity.java.tpl is copied into the generated Android project by scripts/patch_android.py.
