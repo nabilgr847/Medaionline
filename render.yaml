@@ -62,6 +62,13 @@ services:
     rootDir: apps/web
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /manifest.webmanifest
+        name: Cache-Control
+        value: no-cache
     routes:
       - type: rewrite # lets /reset-password (email link) load the single-page app
         source: /*

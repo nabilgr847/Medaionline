@@ -80,3 +80,10 @@ export function parseCsv(text: string): Record<string, string>[] {
   const head = (rows.shift() || []).map((x) => x.trim());
   return rows.filter((r) => r.some((x) => x.trim())).map((r) => Object.fromEntries(head.map((k, i) => [k, (r[i] || "").trim()])));
 }
+
+// Private image/file as a temporary blob URL (for inline previews). Caller must URL.revokeObjectURL it.
+export async function fetchFileUrl(token: string, id: string): Promise<string> {
+  const r = await fetch(`${requireApiUrl()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error("Could not load the file");
+  return URL.createObjectURL(await r.blob());
+}

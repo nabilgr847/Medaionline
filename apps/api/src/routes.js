@@ -348,8 +348,8 @@ router.post("/files/upload",auth,upload.single("file"),validateUploads,wrap(asyn
   if(!allowed.includes(category)){return res.status(400).json({error:"Invalid file category"});}
   if(category==="chat_attachment"){
     const mt=req.file.mimetype||"";
-    if(!/^(image\/(jpeg|png|webp)|audio\/(mpeg|mp4|ogg|webm|wav)|video\/(mp4|webm|quicktime))$/.test(mt))
-      return res.status(400).json({error:"Chat attachments must be image, audio or video"});
+    if(!/^(image\/(jpeg|png|webp)|audio\/(mpeg|mp4|ogg|webm|wav)|video\/(mp4|webm|quicktime)|application\/pdf)$/.test(mt))
+      return res.status(400).json({error:"Chat attachments must be a photo, audio, video or PDF"});
   }
   const record=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category,originalName:req.file.originalname,mimeType:req.file.mimetype,buffer:req.file.buffer});
   await audit(req,"file.uploaded","PrivateFile",record.id,{category});
@@ -648,6 +648,27 @@ router.post("/appointments/:id/call-signals",auth,wrap(async(req,res)=>{
   if(type==="hangup") await CallSession.updateMany({appointmentId:r.appt.id,status:"active"},{$set:{status:"ended",endedAt:new Date(),lastHeartbeatAt:new Date(),lastConnectionState:"ended"}});
   await User.updateOne({_id:req.user.id},{$set:{lastSeenAt:new Date()}});
   res.status(201).json({id:signal.id,createdAt:signal.createdAt});
+}));
+// In-call help: quick Bangla <-> English translation for the people in this appointment (admins included).
+router.post("/appointments/:id/translate",auth,aiLimiter,wrap(async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({error:"Appointment not found"});
+  const appt=await Appointment.findById(req.params.id).select("patientId doctorId"); if(!appt) return res.status(404).json({error:"Appointment not found"});
+  const ok=req.user.role==="admin"||String(appt.patientId)===String(req.user.id)||String(appt.doctorId)===String(req.user.id);
+  if(!ok) return res.status(403).json({error:"Only the appointment participants can use this"});
+  const text=String(req.body.text||"").trim(); if(!text||text.length>1500) return res.status(400).json({error:"Text must be 1-1500 characters"});
+  const to=req.body.to==="en"?"English":"Bangla (Bengali script)";
+  if(!config.openRouterKey) return res.status(503).json({error:"Translation is not configured on the server"});
+  const raw=await callOpenRouter([{role:"system",content:`You are a medical interpreter. Translate the user's text into ${to}. Keep medical terms, drug names, numbers and doses exactly. Output ONLY the translation, no notes, no quotes. Never add advice.`},{role:"user",content:text}],0);
+  res.json({translation:String(typeof raw==="string"?raw:(raw?.text||raw?.answer||raw?.lead||JSON.stringify(raw))).trim().slice(0,3000)});
+}));
+// Admin power: force-end a live call (both sides are told to hang up) and close the call session.
+router.post("/admin/appointments/:id/end-call",auth,allow("admin"),wrap(async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({error:"Appointment not found"});
+  const appt=await Appointment.findById(req.params.id).select("patientId doctorId"); if(!appt) return res.status(404).json({error:"Appointment not found"});
+  for(const uid of [appt.patientId,appt.doctorId]) if(uid) await CallSignal.create({appointmentId:appt.id,senderId:req.user.id,senderRole:"admin",to:uid,type:"admin_end",payload:{}});
+  await CallSession.updateMany({appointmentId:appt.id,status:"active"},{$set:{status:"ended",endedAt:new Date(),lastHeartbeatAt:new Date(),lastConnectionState:"ended"}});
+  await audit(req,"admin.call_force_ended","Appointment",appt.id);
+  res.json({ok:true,message:"Call ended for both participants."});
 }));
 router.get("/appointments/:id/recordings",auth,wrap(async(req,res)=>{
   const r=await getCallParticipant(req.params.id,req.user); if(r.error) return res.status(403).json({error:r.error});

@@ -109,7 +109,7 @@ export const TemporaryConsult = model("TemporaryConsult",temporaryConsultSchema)
 const temporaryCallSignalSchema = new Schema({
   consultId:{type:Schema.Types.ObjectId,ref:"TemporaryConsult",required:true,index:true},
   senderRole:{type:String,enum:["guest","doctor","admin"],required:true},
-  senderName:{type:String,default:"Guest"}, type:{type:String,enum:["offer","answer","ice","hangup"],required:true},
+  senderName:{type:String,default:"Guest"}, type:{type:String,enum:["offer","answer","ice","hangup","admin_end"],required:true},
   payload:{type:Schema.Types.Mixed}
 },{timestamps:true});
 temporaryCallSignalSchema.index({createdAt:1},{expireAfterSeconds:14400});

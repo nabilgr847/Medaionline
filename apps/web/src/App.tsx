@@ -8,9 +8,46 @@ import DoctorApply from "./DoctorApply";
 import { AlertCenter } from "./extras";
 import { BannerSlider, BannerContext } from "./common";
 import GuestConsultRoom from "./GuestConsultRoom";
+import TeleVisitCall from "./TeleVisitCall";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 const norm = (u: any): User => ({ ...u, id: u.id || u._id });
+
+/** WhatsApp-style incoming call alert for patients and doctors, shown on any page of the dashboard. */
+function IncomingCallBanner({ api }: { api: ReturnType<typeof makeApi> }) {
+  const [call, setCall] = useState<any>(null);
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      try {
+        const d = await api("/notifications/mine");
+        const n = (d.notifications || []).find((x: any) => x.type === "incoming_call" && !x.readAt && Date.now() - new Date(x.createdAt).getTime() < 90000);
+        if (live) setCall(n || null);
+      } catch {}
+    };
+    load(); const t = setInterval(load, 4000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+  if (!call) return null;
+  const done = () => { api(`/notifications/${call._id}/read`, { method: "POST", body: json({}) }).catch(() => {}); setCall(null); window.dispatchEvent(new Event("medai-badges")); };
+  const answer = () => { const w = window.open(`/?call=${call.resourceId}`, `medai_call_${call.resourceId}`, "popup,width=1100,height=760"); done(); if (!w) window.location.href = `/?call=${call.resourceId}`; };
+  return <div className="incomingcall" role="alert"><div><b>📞 {call.title}</b><p>{call.message.replace(" Open Appointments and press Join call.", "")}</p></div><div className="row"><button className="primary" onClick={answer}>Answer</button><button className="danger" onClick={done}>Dismiss</button></div></div>;
+}
+
+/** Stand-alone call window: /?call=<appointmentId> (opened from the dashboard or the incoming-call banner). */
+function CallPage() {
+  const id = new URLSearchParams(window.location.search).get("call") || "";
+  const token = localStorage.getItem("medai_token") || ""; const api = makeApi(token);
+  const [user, setUser] = useState<User | null>(null); const [message, setMessage] = useState(""); const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!token) { setErr("Please sign in to MedAI first, then open the call again."); return; }
+    api("/auth/me").then((d) => { const u = norm(d.user); if (u.role === "admin") setErr("Administrators join calls from Messages & calls in the admin panel."); else setUser(u); }).catch(() => setErr("Your session expired. Please sign in again."));
+  }, []);
+  return <div className="callpage"><header><img src="/branding/medai-logo.svg" alt="MedAI Hospital" style={{ height: 36 }} /><a href="/">Back to MedAI</a></header>
+    {message && <p className="notice" onClick={() => setMessage("")}>{message}</p>}
+    {err && <p className="warn">{err} <a href="/">Open MedAI</a></p>}
+    {user && id && <TeleVisitCall api={api} token={token} appointmentId={id} user={user} setMessage={setMessage} standalone />}</div>;
+}
 
 function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
@@ -108,6 +145,7 @@ function MainApp() {
       </div></section></>}
 
     {user && user.role !== "admin" && <AlertCenter api={api} />}
+    {user && user.role !== "admin" && <IncomingCallBanner api={api} />}
     {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
       {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
@@ -145,4 +183,4 @@ function ResetPassword() {
     {ok && <a className="bannerlink" href="/">Continue</a>}</div></div>;
 }
 
-export default function App() { const q=new URLSearchParams(window.location.search); return q.has("consult") ? <GuestConsultRoom /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }
+export default function App() { const q=new URLSearchParams(window.location.search); return q.has("consult") ? <GuestConsultRoom /> : q.has("call") ? <CallPage /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }

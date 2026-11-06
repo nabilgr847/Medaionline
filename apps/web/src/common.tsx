@@ -1,6 +1,6 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { createContext, useContext, useEffect, useState } from "react";
-import { Api, json, fmtDate, postForm, downloadFile } from "./api";
+import { Api, json, fmtDate, postForm, downloadFile, fetchFileUrl } from "./api";
 
 export const BannerContext = createContext<any>(null);
 
@@ -86,11 +86,19 @@ export function BannerSlider({ banner, compact, where }: { banner: any; compact?
   </section>;
 }
 
-export function Chat({ api, appointmentId, meId, token }: { api: Api; appointmentId: string; meId: string; token?: string }) {
+/** Inline preview of a private chat photo (tap to open/download the original). */
+function AttImage({ token, id, name, onError }: { token: string; id: string; name: string; onError: (m: string) => void }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => { let u = ""; let live = true; fetchFileUrl(token, id).then((x) => { u = x; if (live) setUrl(x); else URL.revokeObjectURL(x); }).catch(() => {}); return () => { live = false; if (u) URL.revokeObjectURL(u); }; }, [id, token]);
+  if (!url) return <button type="button" className="outline" onClick={() => downloadFile(token, id, name).catch((e) => onError(e.message))}>🖼️ {name || "Photo"}</button>;
+  return <img src={url} alt={name || "Photo"} className="chatimg" onClick={() => downloadFile(token, id, name || "image").catch((e) => onError(e.message))} />;
+}
+
+export function Chat({ api, appointmentId, meId, token, pollMs = 10000 }: { api: Api; appointmentId: string; meId: string; token?: string; pollMs?: number }) {
   const [msgs, setMsgs] = useState<any[]>([]); const [body, setBody] = useState(""); const [err, setErr] = useState("");
   const [pending, setPending] = useState<any[]>([]); const [busy, setBusy] = useState(false);
   async function load() { try { const d = await api(`/appointments/${appointmentId}/messages`); setMsgs(d.messages || []); setErr(""); } catch (e: any) { setErr(e.message); } }
-  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [appointmentId]);
+  useEffect(() => { load(); const t = setInterval(load, pollMs); return () => clearInterval(t); }, [appointmentId, pollMs]);
   async function onPick(e: any) {
     const files: FileList | null = e.target.files; if (!files || !files.length) return;
     setBusy(true); setErr("");
@@ -99,6 +107,7 @@ export function Chat({ api, appointmentId, meId, token }: { api: Api; appointmen
         const fd = new FormData(); fd.append("file", file); fd.append("category", "chat_attachment");
         const up = await postForm("/files/upload", fd, token || "");
         const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("audio/") ? "audio" : file.type.startsWith("video/") ? "video" : "file";
+        if (file.size > 12 * 1024 * 1024) throw new Error(`${file.name} is larger than 12 MB.`);
         setPending((p) => [...p, { fileId: up.file.id, originalName: file.name, mimeType: file.type, kind, size: file.size }]);
       }
     } catch (x: any) { setErr(x.message); }
@@ -116,7 +125,7 @@ export function Chat({ api, appointmentId, meId, token }: { api: Api; appointmen
   function attView(a: any) {
     if (!a?.fileId) return null;
     const id = a.fileId._id || a.fileId;
-    if (a.kind === "image") return <button type="button" className="outline" onClick={() => downloadFile(token || "", id, a.originalName || "image").catch((e) => setErr(e.message))}>🖼️ {a.originalName || "Photo"}</button>;
+    if (a.kind === "image") return token ? <AttImage token={token} id={id} name={a.originalName || "image"} onError={setErr} /> : <button type="button" className="outline" onClick={() => downloadFile(token || "", id, a.originalName || "image").catch((e) => setErr(e.message))}>🖼️ {a.originalName || "Photo"}</button>;
     if (a.kind === "audio") return <button type="button" className="outline" onClick={() => downloadFile(token || "", id, a.originalName || "audio").catch((e) => setErr(e.message))}>🎵 {a.originalName || "Audio"}</button>;
     if (a.kind === "video") return <button type="button" className="outline" onClick={() => downloadFile(token || "", id, a.originalName || "video").catch((e) => setErr(e.message))}>🎬 {a.originalName || "Video"}</button>;
     return <button type="button" className="outline" onClick={() => downloadFile(token || "", id, a.originalName || "file").catch((e) => setErr(e.message))}>📎 {a.originalName || "File"}</button>;
@@ -142,9 +151,12 @@ export function Chat({ api, appointmentId, meId, token }: { api: Api; appointmen
       <label className="outline" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", margin: 0 }}>
         🎬 Video<input type="file" accept="video/mp4,video/webm,video/quicktime" hidden onChange={onPick} />
       </label>
+      <label className="outline" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", margin: 0 }}>
+        📄 PDF<input type="file" accept="application/pdf" hidden onChange={onPick} />
+      </label>
       <button className="primary" disabled={busy || (!body.trim() && !pending.length)}>{busy ? "…" : "Send"}</button>
     </form>
-    <p className="muted">You can send text, photo, audio or video. Messages are for non-urgent follow-up. In an emergency call 999.</p>
+    <p className="muted">You can send text, photo, audio, video or a PDF. Messages are for non-urgent follow-up. In an emergency call 999.</p>
   </div>;
 }
 

@@ -139,7 +139,8 @@ export function AdminConversations({ api, user, setMessage }: { api: Api; user: 
 function AdminCallObserver({ api, appt, onLeave }: { api: Api; appt: any; onLeave: () => void }) {
   const peers = useRef<Record<string, RTCPeerConnection>>({}); const vids = useRef<Record<string, HTMLVideoElement | null>>({});
   const seen = useRef<Set<string>>(new Set()); const after = useRef(new Date(Date.now() - 1000).toISOString());
-  const [status, setStatus] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<Record<string, string>>({}); const [note, setNote] = useState("");
+  async function endForAll() { if (!window.confirm("End this call for both the doctor and the patient?")) return; try { const r = await api(`/admin/appointments/${appt._id}/end-call`, { method: "POST", body: json({}) }); setNote(r.message); onLeave(); } catch (x: any) { setNote(x.message); } }
   const targets: [string, string][] = [[appt.patientId?._id, "Patient · " + (appt.patientId?.name || "")], [appt.doctorId?._id, "Doctor · " + (appt.doctorId?.name || "")]];
   const sig = (to: string, type: string, payload: any = {}) => api(`/appointments/${appt._id}/call-signals`, { method: "POST", body: json({ type, payload, to }) });
   async function dial(id: string) {
@@ -172,7 +173,8 @@ function AdminCallObserver({ api, appt, onLeave }: { api: Api; appt: any; onLeav
     <p className="muted">You are watching and listening. Both doctor and patient must be in the call; if one shows “Waiting”, press Retry.</p>
     <div className="obsgrid">{targets.map(([id, name]) => id && <div key={id} className="obscell"><video ref={(el) => { vids.current[id] = el; }} autoPlay playsInline controls />
       <div className="row"><b>{name}</b><small>{status[id] || ""}</small><button className="outline" onClick={() => dial(id).catch(() => {})}>Retry</button></div></div>)}</div>
-    <button className="danger" onClick={onLeave}>Leave call</button></div>;
+    {note && <p className="notice">{note}</p>}
+    <div className="row"><button className="outline" onClick={onLeave}>Leave call</button><button className="danger" onClick={endForAll}>⛔ End call for everyone</button></div></div>;
 }
 
 
