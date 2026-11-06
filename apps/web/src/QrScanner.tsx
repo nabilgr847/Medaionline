@@ -61,7 +61,7 @@ export default function QrScanner({ onCode, onClose }: Props) {
         if (!detector) {
           setHint("Point the camera at the QR code…");
           const canvas = document.createElement("canvas");
-          const ctx = canvas.getContext("2d", { willReadFrequently: true } as any);
+          const ctx = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | null;
           const jsTick = () => {
             if (!running.current) return;
             if (ctx && video.readyState >= 2 && video.videoWidth) {
