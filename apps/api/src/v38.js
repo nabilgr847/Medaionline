@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import fs from "fs/promises";
 import rateLimit from "express-rate-limit";
-import { User, Appointment, MedicalReport, Prescription, Medicine, MultiAnalysis, SystemError, CallSession, CallSignal, AuditEvent, Disease, AccessAudit } from "./models.js";
+import { User, Appointment, MedicalReport, Prescription, Medicine, MultiAnalysis, SystemError, CallSession, CallSignal, AuditEvent, Disease, AccessAudit, PrivateFile } from "./models.js";
 import { auth, allow, hashPassword, audit } from "./security.js";
 import { config } from "./config.js";
 import { ageFromDob, normSex } from "./reportRules.js";
@@ -494,9 +494,9 @@ Rules:
         status: report.status,
         docType: report.docType,
         files: {
-          original: report.originalFileId ? { id: report.originalFileId._id, name: report.originalFileId.originalName } : null,
-          aiPdf: report.aiPdfFileId || null,
-          finalPdf: report.finalPdfFileId || null
+          original: report.originalFileId ? { id: String(report.originalFileId._id), name: report.originalFileId.originalName } : null,
+          aiPdf: report.aiPdfFileId ? String(report.aiPdfFileId._id || report.aiPdfFileId) : null,
+          finalPdf: report.finalPdfFileId ? String(report.finalPdfFileId._id || report.finalPdfFileId) : null
         },
         simpleSummary: report.simpleSummary || null
       });
@@ -506,8 +506,37 @@ Rules:
       id: rx.id,
       patient: rx.patientId ? { name: rx.patientId.name, email: rx.patientId.email } : null,
       status: rx.status,
-      pdf: rx.pdfFileId ? { id: rx.pdfFileId._id, name: rx.pdfFileId.originalName } : null
+      pdf: rx.pdfFileId ? { id: String(rx.pdfFileId._id), name: rx.pdfFileId.originalName } : null
     });
+  }));
+
+  // ================= Assigned doctor: all records of their patients =================
+  const linkedPatientIds = async (doctorId) => {
+    const [a, r] = await Promise.all([
+      Appointment.distinct("patientId", { doctorId, status: { $nin: ["cancelled", "rejected"] } }),
+      MedicalReport.distinct("patientId", { doctorId })
+    ]);
+    return [...new Set([...a, ...r].map(String))];
+  };
+  router.get("/doctor/patients", auth, allow("doctor"), wrap(async (req, res) => {
+    const ids = await linkedPatientIds(req.user.id);
+    const patients = await User.find({ _id: { $in: ids } }).select("name email phone gender dateOfBirth").sort({ name: 1 });
+    res.json({ patients });
+  }));
+  router.get("/doctor/patients/:id/records", auth, allow("doctor"), wrap(async (req, res) => {
+    if (!validId(req.params.id)) return res.status(404).json({ error: "Not found" });
+    const ids = await linkedPatientIds(req.user.id);
+    if (!ids.includes(String(req.params.id))) return res.status(403).json({ error: "This patient is not assigned to you" });
+    const pid = req.params.id;
+    const [patient, reports, prescriptions, files, appointments] = await Promise.all([
+      User.findById(pid).select("name email phone gender dateOfBirth"),
+      MedicalReport.find({ patientId: pid }).select("-extractedText").populate("doctorId", "name").sort({ createdAt: -1 }).limit(100),
+      Prescription.find({ patientId: pid, $or: [{ status: { $in: ["signed", "voided"] } }, { doctorId: req.user.id }] }).populate("doctorId", "name").sort({ createdAt: -1 }).limit(100),
+      PrivateFile.find({ ownerId: pid, category: "patient_report" }).select("originalName mimeType size createdAt").sort({ createdAt: -1 }).limit(100),
+      Appointment.find({ patientId: pid }).select("problem status scheduledAt consultationType createdAt doctorId").populate("doctorId", "name").sort({ createdAt: -1 }).limit(50)
+    ]);
+    await audit(req, "doctor.patient_records_viewed", "User", pid);
+    res.json({ patient, reports, prescriptions, files, appointments });
   }));
 
   return { runMultiAnalysis };

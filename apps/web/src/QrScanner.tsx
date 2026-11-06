@@ -1,6 +1,7 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // Camera QR scanner for secret access codes (doctor/admin only).
 import { useEffect, useRef, useState } from "react";
+import jsQR from "jsqr";
 
 type Props = {
   onCode: (code: string) => void;
@@ -23,11 +24,14 @@ export default function QrScanner({ onCode, onClose }: Props) {
   const [err, setErr] = useState("");
   const [hint, setHint] = useState("Point the camera at the QR code…");
   const running = useRef(true);
+  const onCodeRef = useRef(onCode);
+  onCodeRef.current = onCode;
 
   useEffect(() => {
     running.current = true;
     let detector: any = null;
     let raf = 0;
+    let timer = 0;
 
     async function start() {
       try {
@@ -55,7 +59,22 @@ export default function QrScanner({ onCode, onClose }: Props) {
           }
         }
         if (!detector) {
-          setHint("Live QR decode needs Chrome/Edge. You can still type the code below.");
+          setHint("Point the camera at the QR code…");
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d", { willReadFrequently: true } as any);
+          const jsTick = () => {
+            if (!running.current) return;
+            if (ctx && video.readyState >= 2 && video.videoWidth) {
+              const w = Math.min(video.videoWidth, 640), h = Math.round(video.videoHeight * w / video.videoWidth);
+              canvas.width = w; canvas.height = h; ctx.drawImage(video, 0, 0, w, h);
+              const img = ctx.getImageData(0, 0, w, h);
+              const res = jsQR(img.data, w, h);
+              const code = res?.data ? parseMedaiCode(res.data) : null;
+              if (code) { running.current = false; setHint("Code found!"); onCodeRef.current(code); return; }
+            }
+            timer = window.setTimeout(jsTick, 200);
+          };
+          jsTick();
           return;
         }
 
@@ -72,7 +91,7 @@ export default function QrScanner({ onCode, onClose }: Props) {
               if (code) {
                 setHint("Code found!");
                 running.current = false;
-                onCode(code);
+                onCodeRef.current(code);
                 return;
               }
             }
@@ -92,10 +111,24 @@ export default function QrScanner({ onCode, onClose }: Props) {
     return () => {
       running.current = false;
       cancelAnimationFrame(raf);
+      clearTimeout(timer);
       streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     };
-  }, [onCode]);
+  }, []);
+
+  function scanPhoto(e: any) {
+    const f: File | undefined = e.target.files?.[0]; if (!f) return;
+    const img = new Image(); const url = URL.createObjectURL(f);
+    img.onload = () => {
+      const c = document.createElement("canvas"); const w = Math.min(img.width, 1200), h = Math.round(img.height * w / img.width);
+      c.width = w; c.height = h; const x = c.getContext("2d"); if (!x) return; x.drawImage(img, 0, 0, w, h);
+      const r = jsQR(x.getImageData(0, 0, w, h).data, w, h); URL.revokeObjectURL(url);
+      const code = r?.data ? parseMedaiCode(r.data) : null;
+      if (code) { running.current = false; onCodeRef.current(code); } else setHint("No QR found in that photo. Try a clearer one.");
+    };
+    img.src = url; e.target.value = "";
+  }
 
   return (
     <div className="qr-overlay" role="dialog" aria-modal="true" aria-label="QR scanner">
@@ -115,6 +148,7 @@ export default function QrScanner({ onCode, onClose }: Props) {
             <p className="qr-hint">{hint}</p>
           </>
         )}
+        <label className="outline" style={{ display: "block", textAlign: "center", marginTop: 8, padding: "8px", cursor: "pointer" }}>🖼️ Scan from a photo / screenshot<input type="file" accept="image/*" hidden onChange={scanPhoto} /></label>
         <p className="muted" style={{ fontSize: ".85rem", margin: "8px 0 0" }}>
           Only doctor/admin codes work. Patient never sees this QR.
         </p>

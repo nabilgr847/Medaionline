@@ -19,7 +19,7 @@ import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from 
 import { z } from "zod";
 import { callAI, parseJsonLoose, pingAI } from "./ai.js";
 import { installV38, cleanClinical, clinicalForSigning } from "./v38.js";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
@@ -400,6 +400,17 @@ router.get("/files/:id/download",auth,wrap(async(req,res)=>{
       const dm=await DirectMessage.findOne({"attachments.fileId":file._id}).select("conversationId");
       if(dm){const conv=await DirectConversation.findOne({_id:dm.conversationId,participants:req.user.id}).select("_id");permitted=!!conv;if(permitted)accessAction="direct_chat.attachment_access";}
     }
+  }
+  if(!permitted && ["doctor","admin"].includes(req.user.role) && ["patient_report","report_ai_pdf","report_final_pdf"].includes(file.category)){
+    const rep=await MedicalReport.findOne({$or:[{originalFileId:file._id},{aiPdfFileId:file._id},{finalPdfFileId:file._id}]}).select("_id patientId doctorId");
+    const rxr=rep?null:await Prescription.findOne({pdfFileId:file._id}).select("_id patientId doctorId");
+    const rec=rep||rxr; const patientOf=rec?rec.patientId:(file.category==="patient_report"?file.ownerId:null);
+    if(req.user.role==="admin"||(rec&&String(rec.doctorId)===String(req.user.id))) permitted=true;
+    if(!permitted&&patientOf){
+      permitted=!!(await Appointment.exists({doctorId:req.user.id,patientId:patientOf,status:{$nin:["cancelled","rejected"]}}))||!!(await MedicalReport.exists({doctorId:req.user.id,patientId:patientOf}));
+    }
+    if(!permitted&&rec) permitted=!!(await AccessAudit.exists({actorId:req.user.id,resourceId:rec._id,createdAt:{$gt:new Date(Date.now()-3*3600*1000)}}));
+    if(permitted) accessAction="record.file_access";
   }
   if(!permitted) return res.status(403).json({error:"Access denied"});
   if(accessAction) await audit(req,accessAction,"PrivateFile",file.id);
@@ -956,10 +967,24 @@ router.delete("/prescriptions/:id",auth,allow("doctor"),wrap(async(req,res)=>{
   if(rx.status!=="draft") return res.status(409).json({error:"Only drafts can be deleted"});
   await rx.deleteOne(); await audit(req,"prescription.draft_deleted","Prescription",rx.id); res.json({message:"Draft deleted"});
 }));
+// Auto-create (and persist in MongoDB) the prescription signing keypair when it is not set in environment variables.
+async function ensureSigningKeys(){
+  if(config.signingPrivateKey&&config.signingPublicKey) return true;
+  let s=await Setting.findOne({key:"signing_keys"}).lean();
+  if(!s?.value?.priv||!s?.value?.pub){
+    const {publicKey,privateKey}=crypto.generateKeyPairSync("ed25519");
+    const value={priv:privateKey.export({type:"pkcs8",format:"pem"}),pub:publicKey.export({type:"spki",format:"pem"})};
+    try{await Setting.create({key:"signing_keys",value});}catch{}
+    s=await Setting.findOne({key:"signing_keys"}).lean();
+  }
+  if(!s?.value?.priv) return false;
+  config.signingPrivateKey=s.value.priv; config.signingPublicKey=s.value.pub; return true;
+}
 router.post("/prescriptions/:id/sign",auth,allow("doctor"),wrap(async(req,res)=>{
   const rx=await Prescription.findById(req.params.id).populate("doctorId","name doctorProfile.bmdcNumber doctorProfile.signatureFileId");
   if(!rx||String(rx.doctorId._id)!==String(req.user.id)) return res.status(403).json({error:"Only the prescribing doctor can sign this prescription"});
   if(rx.status!=="draft") return res.status(409).json({error:"Only draft prescriptions can be signed"});
+  await ensureSigningKeys();
   if(!config.signingPrivateKey||!config.signingPublicKey) return res.status(503).json({error:"Prescription signing keypair is not configured. Generate and set the PRESCRIPTION_SIGNING_PRIVATE_KEY_BASE64 and PRESCRIPTION_SIGNING_PUBLIC_KEY_BASE64 environment variables."});
   const signatureFileId=rx.doctorId.doctorProfile?.signatureFileId;
   const signatureFile=signatureFileId?await PrivateFile.findOne({_id:signatureFileId,ownerId:req.user.id,category:"doctor_signature"}):null;
@@ -987,6 +1012,7 @@ router.get("/prescriptions/:id/verify",auth,wrap(async(req,res)=>{
   if(!rx) return res.status(404).json({error:"Prescription not found"});
   const allowed=String(rx.patientId)===String(req.user.id)||String(rx.doctorId)===String(req.user.id)||req.user.role==="admin";
   if(!allowed) return res.status(403).json({error:"Access denied"});
+  await ensureSigningKeys();
   if(rx.status!=="signed"||!rx.signatureValue||!config.signingPublicKey) return res.json({valid:false,reason:"Not signed or verification key unavailable"});
   const canonical=prescriptionCanonical(rx);
   const bytes=Buffer.from(canonical,"utf8");
@@ -1162,7 +1188,7 @@ router.get("/doctor/signature",auth,allow("doctor"),wrap(async(req,res)=>{
 }));
 router.get("/prescriptions/:id/signature-image",auth,wrap(async(req,res)=>{
   const rx=await Prescription.findById(req.params.id); if(!rx||rx.status!=="signed"||!rx.signatureImageFileId) return res.status(404).json({error:"Signed signature image not found"});
-  if(String(rx.patientId)!==String(req.user.id)&&String(rx.doctorId)!==String(req.user.id)) return res.status(403).json({error:"Access denied"});
+  if(String(rx.patientId)!==String(req.user.id)&&String(rx.doctorId)!==String(req.user.id)&&req.user.role!=="admin") return res.status(403).json({error:"Access denied"});
   const file=await PrivateFile.findById(rx.signatureImageFileId); if(!file) return res.status(404).json({error:"Signature image unavailable"});
   res.setHeader("Cache-Control","private, no-store"); res.type(file.mimeType); const imagePath=await resolveStoredFilePath(uploadDir,file); res.sendFile(imagePath,()=>{if(file.storageProvider==="gridfs") fs.unlink(imagePath).catch(()=>{});});
 }));

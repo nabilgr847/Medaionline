@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { AdminConversations, DirectMessages, TemporaryConsultAdmin } from "./extras";
 import { Api, json, downloadFile, fmtDate, fmtDay, label, parseCsv } from "./api";
 import { useBadges, Tabs, ChangePassword } from "./common";
+import { QrScanBox, SecretQr } from "./qr";
+import { AdminRx } from "./records";
 import { useTabHistory } from "./tabHistory";
 
 export default function AdminPanel({ api, user, token, onToken, setMessage }: { api: Api; user: any; token: string; onToken: (t: string) => void; setMessage: (s: string) => void }) {
@@ -66,6 +68,7 @@ function ReportsPanel({ api, token, setMessage }: { api: Api; token: string; set
     setBusy(id); try { const r = await api(`/admin/reports/${id}/assign`, { method: "POST", body: json({ doctorId: pick[id] }) }); setMessage(r.message); load(); } catch (e: any) { setMessage(e.message); } setBusy("");
   }
   return <div className="grid">
+    <article className="full"><QrScanBox api={api} token={token} setMessage={setMessage} /></article>
     <article className="full"><h3>📄 Patient reports</h3>
       <p className="muted">Every uploaded report with its AI analysis and doctor review. Opening a patient file is recorded in the audit log.</p>
       <div className="row"><select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All reports</option><option value="pending">Doctor review: Pending</option><option value="approved">Doctor review: Approved</option><option value="rejected">Doctor review: Rejected</option><option value="unassigned">No doctor assigned</option></select>
@@ -84,11 +87,13 @@ function ReportsPanel({ api, token, setMessage }: { api: Api; token: string; set
         {r.files.original && <button className="outline" onClick={() => dl(r.files.original.id, r.files.original.name || "patient-report")}>⬇️ Patient report</button>}
         {r.files.aiPdf && <button className="outline" onClick={() => dl(r.files.aiPdf, "AI-report-analysis.pdf")}>🤖 AI PDF</button>}
         {r.files.finalPdf && <button className="outline" onClick={() => dl(r.files.finalPdf, "doctor-approved-report.pdf")}>✅ Doctor-approved PDF</button>}
+        <SecretQr api={api} kind="report" id={r._id} />
       </div>
       {r.reviewState !== "approved" && r.reviewState !== "rejected" && <div className="row">
         <select value={pick[r._id] || ""} onChange={(e) => setPick({ ...pick, [r._id]: e.target.value })}><option value="">{r.doctor ? "Change doctor…" : "Assign a doctor…"}</option>{doctors.map((d) => <option key={d._id} value={d._id}>Dr. {d.name}{d.specialty ? " · " + d.specialty : ""}</option>)}</select>
         <button className="primary" disabled={busy === r._id} onClick={() => assign(r._id)}>{r.doctor ? "Reassign" : "Assign"}</button></div>}
     </article>)}
+    <AdminRx api={api} token={token} setMessage={setMessage} />
   </div>;
 }
 

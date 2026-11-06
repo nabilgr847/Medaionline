@@ -88,24 +88,18 @@ function Reports({ api, token, setMessage }: { api: Api; token: string; setMessa
   const [files, setFiles] = useState<any[]>([]); const [reports, setReports] = useState<any[]>([]); const [files2, setFiles2] = useState<File[]>([]); const [busy, setBusy] = useState(false); const [reportText, setReportText] = useState(""); const [reportAnalysis, setReportAnalysis] = useState("");
   async function load() { try { const d = await api("/files/mine"); setFiles((d.files || []).filter((f: any) => f.category === "patient_report")); const r=await api("/reports/mine");setReports(r.reports||[]); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
-  async function send() {
-    if (!files2.length) return; setBusy(true); let ok = 0;
-    for (const f of files2) { try { const fd = new FormData(); fd.append("file", f); fd.append("category", "patient_report"); await postForm("/files/upload", fd, token); ok++; } catch (e: any) { setMessage(`${f.name}: ${e.message}`); } }
-    if (ok) setMessage(`${ok} report file${ok > 1 ? "s" : ""} uploaded privately. Your assigned doctor can view ${ok > 1 ? "them" : "it"}.`);
-    setFiles2([]); setBusy(false); load();
-  }
   async function analyzeFiles() {
     if (!files2.length) return; setBusy(true); let out = "";
-    for (const f of files2) { try { const fd = new FormData(); fd.append("file", f); const up = await postForm("/files/upload", fd, token); const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) }); out += `${f.name}\n${an.report.aiExplanation}\nStatus: ${an.report.status}\n\n`; } catch (e: any) { out += `${f.name}: ${e.message}\n\n`; } }
+    for (const f of files2) { try { const fd = new FormData(); fd.append("file", f); fd.append("category", "patient_report"); const up = await postForm("/files/upload", fd, token); const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) }); out += `${f.name}\n${an.report.aiExplanation}\nStatus: ${an.report.status}\n\n`; } catch (e: any) { out += `${f.name}: ${e.message}\n\n`; } }
     setReportAnalysis(out.trim()); setFiles2([]); setBusy(false); load();
   }
   async function remove(id: string) { if (!confirm("Delete this report permanently?")) return; try { await api(`/files/${id}`, { method: "DELETE" }); load(); } catch (e: any) { setMessage(e.message); } }
   async function analyzeReport() { setBusy(true); try { const d = await api("/ai/report-analysis", { method: "POST", body: json({ reportText }) }); setReportAnalysis(d.answer + "\n\n" + d.disclaimer); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
   return <div className="grid">
-    <article><h3>Upload a report</h3><p className="muted">PDF, JPG, PNG or WEBP. Only you and the doctor assigned to your appointment can open patient reports.</p>
+    <article><h3>Upload a report</h3><p className="muted">Every upload is analysed by AI automatically and sent to the doctor. PDF, JPG, PNG or WEBP. Only you and the doctor assigned to your appointment can open patient reports.</p>
       <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => { setFiles2(Array.from(e.target.files || []).slice(0, 10)); }} />
       {files2.length > 0 && <p className="muted">{files2.length} file{files2.length > 1 ? "s" : ""} selected</p>}
-      <div className="row"><button className="primary" onClick={send} disabled={!files2.length || busy}>{busy ? "Please wait…" : "Upload report(s)"}</button><button className="outline" onClick={analyzeFiles} disabled={!files2.length || busy}>{busy ? "Please wait…" : "Analyze each file"}</button></div>
+      <div className="row"><button className="primary" onClick={analyzeFiles} disabled={!files2.length || busy}>{busy ? "Please wait…" : "Upload & analyze"}</button></div>
       {busy && <p className="muted">Working on your files — this can take a minute on mobile data.</p>}</article>
     <SendReports api={api} token={token} setMessage={setMessage} onDone={load} />
     <article><h3>Upload audio or video</h3><p className="muted">MP3, M4A, OGG, WAV, MP4, WEBM or MOV. Uploading stores the file privately; it does not automatically transcribe or analyze it.</p><MediaUploader api={api} token={token} setMessage={setMessage} /></article>
@@ -186,14 +180,14 @@ function MyPrescriptions({ api, token, user, setMessage }: { api: Api; token: st
     <p className="muted">Take your prescription to a licensed pharmacist. Do not change doses without your doctor.</p>
     {list.length === 0 && <p className="muted">No prescriptions yet.</p>}
     {list.map((rx, idx) => <div className="item numbered" key={rx._id}>
-      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>Dr. {rx.doctorId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time></div>
+      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>Dr. {rx.doctorId?.name}</span><time>{rx.signedAt ? "Signed " + fmtDate(rx.signedAt) : fmtDate(rx.createdAt)}</time></div>
       {rx.status === "voided" && <p className="warn">This prescription was voided{rx.voidReason ? ": " + rx.voidReason : ""}. Do not use it.</p>}
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}{i.instructions ? " (" + i.instructions + ")" : ""}</p>)}
       {rx.clinical?.diagnosis && <p><b>Diagnosis:</b> {rx.clinical.diagnosis}</p>}
       {rx.advisedTests && <p style={{ whiteSpace: "pre-wrap" }}><b>Advised tests:</b> {rx.advisedTests}</p>}
       {rx.clinical?.advice && <p style={{ whiteSpace: "pre-wrap" }}><b>Advice:</b> {rx.clinical.advice}</p>}{rx.clinical?.followUp && <p><b>Follow-up:</b> {rx.clinical.followUp}</p>}
       {rx.notes && <p className="muted">Notes: {rx.notes}</p>}
-      <div className="row"><button className="outline" onClick={() => verify(rx._id)}>🔏 Verify signature</button><button className="outline" onClick={() => printRx(rx, user.name)}>🖨️ Print</button>{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>⬇️ Download signed PDF</button>}</div>
+      <div className="row"><button className="outline" onClick={() => verify(rx._id)}>🔏 Verify signature</button><button className="outline" onClick={() => printRx(rx, user.name, token)}>🖨️ Print</button>{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>⬇️ Download signed PDF</button>}</div>
       {check[rx._id] && <p className="notice">{check[rx._id]}</p>}
     </div>)}</article></div>;
 }

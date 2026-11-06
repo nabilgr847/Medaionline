@@ -1,0 +1,9 @@
+# V3.8.4
+- Signature image now shows in every doctor-signed PDF (prescription + approved report) and in Print (it was missing from Print). Signature gets a line and "Signed by <doctor> - <date & time>".
+- Prescription signing no longer fails when signing keys are missing on Render: keys are auto-created once and stored in MongoDB (env keys still win if set).
+- QR codes are generated locally (no external site) for reports and prescriptions, in Doctor and Admin screens.
+- QR scanner works on all browsers (jsQR fallback) + "scan from photo". Scanner added to Doctor Reports, Doctor Prescriptions, Admin Reports.
+- "Open by code" returned wrong file ids and blocked downloads; fixed.
+- Patient: upload-only button removed. Upload always = upload + AI analysis.
+- New doctor tab "My patients": assigned doctor sees all of a patient's reports, prescriptions, files and appointments.
+- Signed time is shown ("Signed <date time>") in prescription lists.

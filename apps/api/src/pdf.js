@@ -111,9 +111,14 @@ function resultsTable(doc,findings){
   doc.moveDown(0.8);doc.fillColor(NAVY);
 }
 function signature(doc,buf,label,caption){
-  ensure(doc,120);doc.moveDown(0.6);doc.font("Helvetica-Bold").fontSize(10).fillColor(NAVY).text(label||"Doctor signature",48,doc.y);doc.moveDown(0.3);
-  try{doc.image(buf,{fit:[180,70]});}catch{throw new Error("Signature image could not be embedded. Upload a PNG or JPG signature.");}
-  doc.moveDown(0.4);if(caption){doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);put(doc,caption,48,doc.y,{width:499});}
+  ensure(doc,140);doc.moveDown(0.6);const y=doc.y;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(NAVY).text(label||"Doctor signature",48,y,{lineBreak:false});
+  const y0=y+16;
+  try{doc.save();doc.image(buf,48,y0,{fit:[180,70]});doc.restore();}catch{throw new Error("Signature image could not be embedded. Upload a PNG or JPG signature.");}
+  doc.moveTo(48,y0+74).lineTo(240,y0+74).lineWidth(0.6).strokeColor("#9fb3c4").stroke();
+  doc.y=y0+80;doc.x=48;
+  if(caption){doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);put(doc,caption,48,doc.y,{width:499});}
+  doc.fillColor(NAVY);
 }
 
 /** Structured lab-report PDF (AI analysis and doctor-approved versions). */
@@ -195,7 +200,7 @@ export function makePrescriptionPdf({patientName,patientAge,patientSex,clinical,
   const doc=newDoc("Prescription","Signed prescription");
   doc.font("Helvetica-Bold").fontSize(20).fillColor(NAVY);put(doc,"Prescription",48,doc.y,{width:499},"Helvetica-Bold");doc.moveDown(0.5);
   badge(doc,voided?"VOIDED - DO NOT USE":"FINALIZED / DOCTOR-SIGNED",voided?"#b3261e":BLUE);
-  metaGrid(doc,[["Patient",patientName],["Age / Sex",[patientAge!=null&&patientAge!==""?patientAge+" y":"",patientSex||""].filter(Boolean).join(" / ")||"-"],["Doctor",doctorName],["BMDC",bmdc||"Not provided"],["Date",date]]);
+  metaGrid(doc,[["Patient",patientName],["Age / Sex",[patientAge!=null&&patientAge!==""?patientAge+" y":"",patientSex||""].filter(Boolean).join(" / ")||"-"],["Doctor",doctorName],["BMDC",bmdc||"Not provided"],["Signed on (date & time)",date]]);
   const cl=clinical||{};
   [["Chief complaints","complaints"],["Past history","history"],["Past tests / reports","pastTests"],["Examination","examination"],["Vitals","vitals"],["Diagnosis","diagnosis"]].forEach(([t,k])=>{if(cl[k]){h2(doc,t);para(doc,cl[k]);}});
   ensure(doc,60);doc.moveDown(0.4);doc.font("Helvetica-BoldOblique").fontSize(26).fillColor(BLUE).text("Rx",48,doc.y);doc.x=48;doc.moveDown(0.2);
@@ -216,7 +221,7 @@ export function makePrescriptionPdf({patientName,patientAge,patientSex,clinical,
   if(cl.advice){h2(doc,"Advice");para(doc,cl.advice);}
   if(cl.followUp){h2(doc,"Follow-up");para(doc,cl.followUp);}
   if(notes){h2(doc,"Doctor's notes");para(doc,notes);}
-  if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature","");
+  if(signatureBuffer)signature(doc,signatureBuffer,"Doctor signature",`Signed by ${doctorName||""}${date?" - "+date:""}`);
   if(signatureHash){doc.moveDown(0.8);ensure(doc,40);doc.fontSize(7.5).fillColor(MUTED);put(doc,`In-app digital signature (Ed25519). Content hash: ${signatureHash}. This is not a government-issued qualified digital certificate.`,48,doc.y,{width:499});}
   return finish(doc,"MedAI Hospital - Prescription. Take medicines only as directed by your doctor.");
 }

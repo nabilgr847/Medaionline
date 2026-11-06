@@ -7,7 +7,9 @@ import { DoctorCombined } from "./v38";
 import { useTabHistory } from "./tabHistory";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPhoto, DirectMessages } from "./extras";
-import QrScanner, { parseMedaiCode } from "./QrScanner";
+import { parseMedaiCode } from "./QrScanner";
+import { QrScanBox, SecretQr } from "./qr";
+import { DoctorPatients } from "./records";
 
 const PRESCRIBABLE = ["awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "completed", "follow_up_required"];
 const SCHEDULABLE = ["requested", "awaiting_records", "awaiting_tests", "follow_up_required"];
@@ -21,10 +23,11 @@ export default function DoctorPanel({ api, token, user, onToken, setMessage }: {
   const badges = useBadges(api, "doctor");
   useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
+    <Tabs strip="doctor" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["requests", "New requests"], ["rx", "Prescriptions"], ["reports", "Report review"], ["patients", "My patients"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["profile", "My doctor profile"]]} />
     {tab === "appointments" && <MyAppointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "requests" && <Requests api={api} setMessage={setMessage} />}
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
+    {tab === "patients" && <DoctorPatients api={api} token={token} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
     {tab === "combined" && <DoctorCombined api={api} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
@@ -243,15 +246,15 @@ function PrescriptionList({ api, token, setMessage }: { api: Api; token: string;
   async function del(id: string) { if (!confirm("Delete this draft?")) return; try { await api(`/prescriptions/${id}`, { method: "DELETE" }); load(); } catch (e: any) { setMessage(e.message); } }
   async function voidRx(id: string) { const reason = prompt("Reason for voiding (shown to the patient):"); if (!reason) return; try { await api(`/prescriptions/${id}/void`, { method: "POST", body: json({ reason }) }); setMessage("Prescription voided. Write a corrected one."); load(); } catch (e: any) { setMessage(e.message); } }
   async function verify(id: string) { try { const d = await api(`/prescriptions/${id}/verify`); setCheck({ ...check, [id]: d.valid ? "✔ Signature valid and content unchanged" : "✖ Not valid: " + (d.reason || "content or signature mismatch") }); } catch (e: any) { setMessage(e.message); } }
-  return <div className="grid"><article className="full"><h3>Prescriptions</h3><button className="outline" onClick={load}>Refresh</button>
+  return <div className="grid"><article className="full"><h3>Prescriptions</h3><QrScanBox api={api} token={token} setMessage={setMessage} /><button className="outline" onClick={load}>Refresh</button>
     {list.length === 0 && <p className="muted">No prescriptions yet. Create one from an appointment.</p>}
     {list.map((rx, idx) => <div className="item numbered" key={rx._id}>
-      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>{rx.patientId?.name}</span><time>{fmtDate(rx.signedAt || rx.createdAt)}</time><span className="muted">{rx.reportId ? "from report" : "from appointment"}</span></div>
+      <div className="itemhead"><Seq n={idx + 1} /><b>{label(rx.status)}</b><span>{rx.patientId?.name}</span><time>{rx.signedAt ? "Signed " + fmtDate(rx.signedAt) : "Draft " + fmtDate(rx.createdAt)}</time><span className="muted">{rx.reportId ? "from report" : "from appointment"}</span></div>
       {rx.items.map((i: any, n: number) => <p key={n}>• {i.brand ? i.brand + " — " : ""}{i.generic} {i.strength} {i.form} — {i.dose}, {i.frequency}, {i.duration}</p>)}
       {rx.signatureHash && <p className="muted">Hash: {rx.signatureHash}</p>}
       <div className="row">
         {rx.status === "draft" && <><button className="outline" onClick={() => setEdit(edit === rx._id ? "" : rx._id)}>Edit</button><button className="primary" onClick={() => sign(rx._id)}>Review &amp; sign</button><button className="danger" onClick={() => del(rx._id)}>Delete draft</button></>}
-        {rx.status === "signed" && <><button className="outline" onClick={() => verify(rx._id)}>Verify</button><button className="outline" onClick={() => printRx(rx)}>Print</button>{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>Download PDF</button>}<button className="danger" onClick={() => voidRx(rx._id)}>Void</button></>}
+        {rx.status === "signed" && <><button className="outline" onClick={() => verify(rx._id)}>Verify</button><button className="outline" onClick={() => printRx(rx, undefined, token)}>Print</button><SecretQr api={api} kind="rx" id={rx._id} />{rx.pdfFileId && <button className="outline" onClick={() => downloadFile(token, rx.pdfFileId, "signed-prescription.pdf").catch((e) => setMessage(e.message))}>Download PDF</button>}<button className="danger" onClick={() => voidRx(rx._id)}>Void</button></>}
       </div>
       {check[rx._id] && <p className="notice">{check[rx._id]}</p>}
       {edit === rx._id && <RxEditor api={api} rx={rx} onSaved={() => { setEdit(""); setMessage("Draft updated."); load(); }} setMessage={setMessage} />}
@@ -291,21 +294,7 @@ function DoctorReportReview({ api, token, setMessage }: { api: Api; token: strin
   const list = reports.filter((r) => (show === "all" ? true : show === "todo" ? REVIEW_OPEN.includes(r.status) : REVIEW_DONE.includes(r.status) || r.status === "rejected"));
   const dl = (id: string, name: string) => downloadFile(token, id, name).catch((e) => setMessage(e.message));
   return <div className="grid"><article className="full"><h3>Reports</h3>
-    <div className="secret-code-box" style={{ marginBottom: 12 }}>
-      <div><span className="code">Open by secret code</span><small>Patient cannot see this code. Scan QR or type to open the file.</small></div>
-      <div className="row">
-        <input value={codeIn} onChange={e => setCodeIn(e.target.value.toUpperCase())} placeholder="XXXXXXXXXX" style={{ letterSpacing: ".08em", fontFamily: "monospace" }} />
-        <button className="primary" onClick={() => resolveCode(codeIn)}>Open</button>
-        <button className="outline" type="button" onClick={() => setScanOpen(true)}>📷 Scan QR</button>
-      </div>
-    </div>
-    {scanOpen && <QrScanner onCode={onScanned} onClose={() => setScanOpen(false)} />}
-    {codeResult && <div className="item"><b>{codeResult.type}</b> · {codeResult.patient?.name || "—"} · {codeResult.status}
-      {codeResult.files?.original && <button className="outline" onClick={() => dl(codeResult.files.original.id, codeResult.files.original.name)}>Original</button>}
-      {codeResult.files?.aiPdf && <button className="outline" onClick={() => dl(codeResult.files.aiPdf, "ai.pdf")}>AI PDF</button>}
-      {codeResult.files?.finalPdf && <button className="outline" onClick={() => dl(codeResult.files.finalPdf, "final.pdf")}>Final PDF</button>}
-      {codeResult.pdf && <button className="outline" onClick={() => dl(codeResult.pdf.id, "prescription.pdf")}>Prescription PDF</button>}
-    </div>}
+    <QrScanBox api={api} token={token} setMessage={setMessage} />
     <div className="row"><button className={show === "todo" ? "primary" : "outline"} onClick={() => setShow("todo")}>To review ({reports.filter((r) => REVIEW_OPEN.includes(r.status)).length})</button><button className={show === "done" ? "primary" : "outline"} onClick={() => setShow("done")}>Reviewed / prescribe</button><button className={show === "all" ? "primary" : "outline"} onClick={() => setShow("all")}>All</button><button className="outline" onClick={load}>↻ Refresh</button></div>
     {list.length === 0 && <p className="muted">No reports here.</p>}
     {list.map((r, idx) => { const open = REVIEW_OPEN.includes(r.status); const done = REVIEW_DONE.includes(r.status); return <div className="item numbered" key={r._id}>
@@ -315,15 +304,8 @@ function DoctorReportReview({ api, token, setMessage }: { api: Api; token: strin
         <button className="outline" onClick={() => dl(r.originalFileId?._id || r.originalFileId, "original-report")}>Open original report</button>
         {r.aiPdfFileId && <button className="outline" onClick={() => dl(r.aiPdfFileId, "ai-analysis.pdf")}>AI PDF</button>}
         {r.finalPdfFileId && <button className="outline" onClick={() => dl(r.finalPdfFileId, "doctor-approved-report.pdf")}>Approved PDF</button>}
-        <button className="outline" onClick={() => showSecret(r._id)} title="Only doctor/admin can see this code">{secretMap[r._id] ? `Code: ${secretMap[r._id]}` : "🔑 Secret code"}</button>
+        <SecretQr api={api} kind="report" id={r._id} />
       </div>
-      {secretMap[r._id] && <div className="secret-code-box">
-        <div>
-          <span className="code">{secretMap[r._id]}</span>
-          <small>Patient cannot see this. Scan the QR or type the code to open the file.</small>
-        </div>
-        <img className="secret-qr-img" alt="Secret QR" src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent("medai:report:" + secretMap[r._id])}`} />
-      </div>}
       {(open || rxFor === r._id) && <>{(r.findings || []).map((f: any, i: number) => <p key={i}>{f.name}: {f.value} {f.unit} · <b>{f.status}</b> · {f.check}</p>)}{open ? <><label>Description (AI text — you can edit it)<textarea rows={8} value={expl[r._id] ?? r.doctorExplanation ?? r.aiExplanation ?? ""} onChange={(e) => setExpl({ ...expl, [r._id]: e.target.value })} /></label><label>Advised tests (one per line)<textarea rows={3} value={tst[r._id] ?? r.advisedTests ?? ""} onChange={(e) => setTst({ ...tst, [r._id]: e.target.value })} placeholder="Tests the patient should get done…" /></label></> : <><pre className="answer">{r.doctorExplanation || r.aiExplanation}</pre>{r.advisedTests && <p style={{ whiteSpace: "pre-wrap" }}><b>Advised tests:</b> {r.advisedTests}</p>}</>}</>}
       {open && <><textarea rows={3} value={comments[r._id] || ""} onChange={(e) => setComments({ ...comments, [r._id]: e.target.value })} placeholder="Review comments / rejection reason / requested correction" />
         <div className="row"><button className="outline" onClick={() => review(r._id, "start")}>Start review</button><button className="outline" onClick={() => review(r._id, "comment")}>Save comment</button><button className="outline" onClick={() => review(r._id, "request_changes")}>Request changes</button><button className="danger" onClick={() => review(r._id, "reject")}>Reject</button><button className="primary" onClick={() => review(r._id, "approve")}>Approve &amp; sign</button></div></>}
