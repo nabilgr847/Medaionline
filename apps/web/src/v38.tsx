@@ -81,11 +81,11 @@ export function DoctorCombined({ api, setMessage }: { api: Api; setMessage: (s: 
 
 function ReviewBox({ api, a, done, setMessage }: { api: Api; a: any; done: () => void; setMessage: (s: string) => void }) {
   const ai = a.ai || {};
-  const [f, setF] = useState({ summary: ai.summary || "", urgency: ai.urgency || "routine", specialty: ai.suggestedSpecialty || "", advice: "", tests: (ai.suggestedTests || []).map((t: any) => t.name).join("\n"), conditions: (ai.possibleConditions || []).map((c: any) => `${c.name} | ${c.likelihood} | ${c.note || ""}`).join("\n") });
+  const [f, setF] = useState<Record<string, string>>({ summary: ai.summary || "", urgency: ai.urgency || "routine", specialty: ai.suggestedSpecialty || "", advice: "", tests: (ai.suggestedTests || []).map((t: any) => t.name).join("\n"), conditions: (ai.possibleConditions || []).map((c: any) => `${c.name} | ${c.likelihood} | ${c.note || ""}`).join("\n") });
   const [note, setNote] = useState("");
   async function send(decision: string) {
-    const conditions = f.conditions.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [name, likelihood, ...n] = l.split("|").map((x) => x.trim()); return { name, likelihood: likelihood || "", note: n.join(" | ") }; });
-    try { await api(`/multi-analyses/${a._id}/review`, { method: "POST", body: json({ decision, note, final: { summary: f.summary, urgency: f.urgency, specialty: f.specialty, advice: f.advice, tests: f.tests.split("\n").map((x) => x.trim()).filter(Boolean), conditions } }) }); setMessage(decision === "approve" ? "Approved. The patient can now see it." : "Marked as not confirmed."); done(); } catch (e: any) { setMessage(e.message); }
+    const conditions = f.conditions.split("\n").map((l: string) => l.trim()).filter(Boolean).map((l: string) => { const [name, likelihood, ...n] = l.split("|").map((x: string) => x.trim()); return { name, likelihood: likelihood || "", note: n.join(" | ") }; });
+    try { await api(`/multi-analyses/${a._id}/review`, { method: "POST", body: json({ decision, note, final: { summary: f.summary, urgency: f.urgency, specialty: f.specialty, advice: f.advice, tests: f.tests.split("\n").map((x: string) => x.trim()).filter(Boolean), conditions } }) }); setMessage(decision === "approve" ? "Approved. The patient can now see it." : "Marked as not confirmed."); done(); } catch (e: any) { setMessage(e.message); }
   }
   return <div className="record"><AiView ai={ai} /><Trends trends={a.trends} /><hr />
     <b>Your final version (edit anything)</b>
