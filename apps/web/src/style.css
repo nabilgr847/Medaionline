@@ -762,3 +762,32 @@ body>.callstage.callfs .call-remote video{width:100%!important;height:100%!impor
 .qr-hint{text-align:center;margin:10px 0 0;font-size:.9rem;color:#334}
 .qr-err{color:#b91c1c;background:#fef2f2;border-radius:10px;padding:12px;margin:8px 0}
 .secret-qr-img{width:140px;height:140px;border-radius:10px;background:#fff;padding:6px;border:1px solid #e2e8f0}
+
+/* ===== Report pick list (mobile-friendly checkboxes) ===== */
+.picklist{display:flex;flex-direction:column;gap:8px;margin:10px 0 14px}
+.picklist>b{margin-bottom:2px}
+.pick-item{display:flex!important;flex-direction:row!important;align-items:flex-start!important;gap:12px!important;padding:12px 14px;background:#f7fbfd;border:1px solid #dceaf1;border-radius:12px;font-weight:500!important;margin:0!important;cursor:pointer}
+.pick-item input[type=checkbox]{width:20px!important;height:20px;flex:none!important;margin:2px 0 0!important;accent-color:#087fbd}
+.pick-item span{flex:1;min-width:0;line-height:1.35;font-size:.92rem}
+.pick-item small{display:block;color:var(--muted);font-weight:400;margin-top:2px;overflow-wrap:anywhere}
+.pick-item:has(input:checked){background:#e8f6fa;border-color:#9fd0e0}
+
+/* ===== Global fix: any checkbox label stays horizontal (mobile + desktop) ===== */
+label:has(> input[type="checkbox"]){
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:flex-start!important;
+  gap:10px!important;
+  font-weight:500!important;
+}
+label:has(> input[type="checkbox"]) > input[type="checkbox"]{
+  width:20px!important;
+  height:20px!important;
+  flex:none!important;
+  margin:2px 0 0!important;
+}
+/* row + checkbox was stretching the box on mobile */
+.row > input[type="checkbox"]{
+  flex:none!important;
+  width:20px!important;
+}

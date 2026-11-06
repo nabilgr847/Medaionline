@@ -70,7 +70,33 @@ export async function downloadFile(token: string, id: string, name: string): Pro
 export const fmtDate = (v?: string) => (v ? new Date(v).toLocaleString() : "—");
 export const fmtDay = (v?: string) => (v ? new Date(v).toLocaleDateString() : "—");
 export const fmtSize = (n?: number) => (n ? (n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB") : "");
-export const label = (s?: string) => (s || "").replace(/_/g, " ");
+/** Status / enum → readable Title Case (fixes "ai processing", "pending doctor review"). */
+export const label = (s?: string) => {
+  const raw = String(s || "").replace(/_/g, " ").trim();
+  if (!raw) return "";
+  const special: Record<string, string> = {
+    "ai processing": "AI processing",
+    "ai analysis completed": "AI analysis completed",
+    "pending doctor review": "Pending doctor review",
+    "under review": "Under review",
+    "changes requested": "Changes requested",
+    "pending email": "Pending email",
+    "pending verification": "Pending verification",
+    "pending approval": "Pending approval",
+    "in progress": "In progress",
+    "waiting room": "Waiting room",
+    "follow up required": "Follow-up required",
+    "awaiting records": "Awaiting records",
+    "awaiting tests": "Awaiting tests",
+    "in person": "In person",
+    "doctor approved": "Doctor approved",
+    "not submitted": "Not submitted",
+    "not analyzed": "Not analyzed",
+  };
+  const key = raw.toLowerCase();
+  if (special[key]) return special[key];
+  return raw.replace(/\b[a-z]/g, (c) => c.toUpperCase()).replace(/\bAi\b/g, "AI").replace(/\bPdf\b/g, "PDF").replace(/\bId\b/g, "ID");
+};
 export const listFromText = (t: string) => t.split(",").map((x) => x.trim()).filter(Boolean);
 
 export function parseCsv(text: string): Record<string, string>[] {

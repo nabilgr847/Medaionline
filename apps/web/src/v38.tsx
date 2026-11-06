@@ -45,7 +45,10 @@ export function PatientCombined({ api, setMessage, token = "" }: { api: Api; set
   return <div className="grid"><article className="full"><h3>🔬 Combined report analysis</h3>
     <p className="muted">Choose two or more of your reports (for example the same test on different dates, or blood + urine + X-ray). AI looks at all of them together, shows how values changed, and lists possible conditions to discuss with a doctor. A doctor then reviews it. This is not a diagnosis.</p>
     {reports.length < 2 && <p className="notice">Upload and analyse at least 2 reports in “My reports” first.</p>}
-    {reports.map((r) => <label key={r._id} className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} checked={sel.includes(r._id)} onChange={() => toggle(r._id)} /> {label(r.docType)} · {fmtDay(r.createdAt)} · <span className="muted">{label(r.status)}</span></label>)}
+    <div className="picklist">{reports.map((r) => <label key={r._id} className="check pick-item">
+      <input type="checkbox" checked={sel.includes(r._id)} onChange={() => toggle(r._id)} />
+      <span><strong>{label(r.docType)}</strong> · {fmtDay(r.createdAt)} · <span className="muted">{label(r.status)}</span></span>
+    </label>)}</div>
     <div className="row"><select value={lang} onChange={(e) => setLang(e.target.value)}><option value="en">English</option><option value="bn">বাংলা</option></select><button className="primary" disabled={busy || sel.length < 2} onClick={run}>{busy ? "Analysing…" : `Analyse ${sel.length || ""} reports together`}</button></div>
   </article>
     {list.map((a) => <article className="full" key={a._id}>
@@ -100,9 +103,14 @@ export function SendReports({ api, token, setMessage, onDone }: { api: Api; toke
     <p className="muted">Add new files (up to {MAX}) and/or tick earlier AI-analysed reports. AI analyses the new files, then everything is reviewed together as one combined report by the doctor.</p>
     <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={busy} onChange={(e) => { setFiles((l) => [...l, ...Array.from(e.target.files || [])].slice(0, MAX)); e.target.value = ""; }} />
     {files.map((f, i) => <div className="row" key={f.name + i} style={{ alignItems: "center", gap: 8 }}>📎 {f.name}<button className="outline" disabled={busy} onClick={() => setFiles((l) => l.filter((_, j) => j !== i))}>✕</button></div>)}
-    {old.length > 0 && <><b>Earlier analysed reports (tick to include again)</b>
-      {old.map((r) => <label key={r._id} className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} disabled={busy} checked={sel.includes(r._id)} onChange={() => toggle(r._id)} /> {label(r.docType)} · {fmtDay(r.createdAt)} · {r.status === "signed" || r.status === "approved" ? "doctor-approved" : "AI draft"}{r.aiStructured?.summary ? " — " + String(r.aiStructured.summary).slice(0, 70) + "…" : ""}</label>)}</>}
-    <label className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} checked={combine} onChange={(e) => setCombine(e.target.checked)} /> Also make one combined review + PDF (old + new together)</label>
+    {old.length > 0 && <div className="picklist"><b>Earlier analysed reports (tick to include again)</b>
+      {old.map((r) => <label key={r._id} className="check pick-item">
+        <input type="checkbox" disabled={busy} checked={sel.includes(r._id)} onChange={() => toggle(r._id)} />
+        <span><strong>{label(r.docType)}</strong> · {fmtDay(r.createdAt)} · {r.status === "signed" || r.status === "approved" ? "doctor-approved" : "AI draft"}
+          {r.aiStructured?.summary ? <small> — {String(r.aiStructured.summary).slice(0, 90)}{String(r.aiStructured.summary).length > 90 ? "…" : ""}</small> : null}
+        </span>
+      </label>)}</div>}
+    <label className="check" style={{ margin: "12px 0" }}><input type="checkbox" checked={combine} onChange={(e) => setCombine(e.target.checked)} /> <span>Also make one combined review + PDF (old + new together)</span></label>
     <div className="row"><select value={lang} onChange={(e) => setLang(e.target.value)}><option value="en">English</option><option value="bn">বাংলা</option></select>
       <button className="primary" disabled={busy || !total} onClick={run}>{busy ? "Working…" : `Analyse & send ${total || ""} to doctor`}</button></div>
     {log.map((l, i) => <p key={i} className={l.ok ? "muted" : "warn"}>{l.t}</p>)}
@@ -120,7 +128,10 @@ export function DoctorCombined({ api, setMessage }: { api: Api; setMessage: (s: 
   return <div className="grid"><article className="full"><h3>🔬 Combined report analysis</h3>
     <p className="muted">Patients can analyse several reports together; those requests appear below for your review. You can also start one for your own patient.</p>
     <div className="row"><select value={pid} onChange={(e) => { setPid(e.target.value); setSel([]); }}><option value="">Choose a patient with 2+ analysed reports…</option>{pats.map((x) => <option key={x._id} value={x._id}>{x.name} ({x.reports.length} reports)</option>)}</select></div>
-    {p && p.reports.map((r: any) => <label key={r._id} className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} checked={sel.includes(r._id)} onChange={() => setSel((s) => (s.includes(r._id) ? s.filter((x) => x !== r._id) : [...s, r._id]))} /> {label(r.docType)} · {fmtDay(r.createdAt)}</label>)}
+    {p && <div className="picklist">{p.reports.map((r: any) => <label key={r._id} className="check pick-item">
+      <input type="checkbox" checked={sel.includes(r._id)} onChange={() => setSel((s) => (s.includes(r._id) ? s.filter((x) => x !== r._id) : [...s, r._id]))} />
+      <span><strong>{label(r.docType)}</strong> · {fmtDay(r.createdAt)}</span>
+    </label>)}</div>}
     {p && <button className="primary" disabled={busy || sel.length < 2} onClick={run}>{busy ? "Analysing…" : `Analyse ${sel.length || ""} reports together`}</button>}
   </article>
     {list.length === 0 && <article className="full"><p className="muted">No combined analyses yet.</p></article>}

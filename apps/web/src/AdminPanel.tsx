@@ -416,7 +416,7 @@ function RequestsPanel({ api, setMessage }: { api: Api; setMessage: (s: string) 
         {u.status === "active" && u.role !== "admin" && issue?._id !== u._id && <button className="outline" onClick={() => openIssue(u)}>🔐 New login details</button>}
         {issue?._id === u._id && <div className="item"><label>Login ID (email)<input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} /></label>
           <label>New password (leave empty to keep the one they chose)<input type="text" minLength={12} value={pw} onChange={(e) => { setPw(e.target.value); setAuto(false); }} /></label>
-          <label><input type="checkbox" checked={auto} onChange={(e) => { setAuto(e.target.checked); if (e.target.checked) setPw(""); }} /> Create a random new password instead</label>
+          <label className="check"><input type="checkbox" checked={auto} onChange={(e) => { setAuto(e.target.checked); if (e.target.checked) setPw(""); }} /> <span>Create a random new password instead</span></label>
           <div className="row"><button className="primary" disabled={busy === u._id} onClick={() => issueLogin(u)}>📧 Approve &amp; send to {u.contactEmail || u.email}</button><button className="outline" onClick={() => setIssue(null)}>Cancel</button></div></div>}
       </div>)}
       <p className="muted">Patients request an account with their own email and password. You approve it and they are emailed (or you tell them yourself if email is not set up). You can also give them a new login ID or password. Doctors are approved in “Doctor verification”; after that you can create new login details here.</p></article>
