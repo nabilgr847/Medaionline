@@ -4,11 +4,70 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import fs from "fs/promises";
 import rateLimit from "express-rate-limit";
-import { User, Appointment, MedicalReport, Prescription, Medicine, MultiAnalysis, SystemError, CallSession, CallSignal, AuditEvent } from "./models.js";
+import { User, Appointment, MedicalReport, Prescription, Medicine, MultiAnalysis, SystemError, CallSession, CallSignal, AuditEvent, Disease, AccessAudit } from "./models.js";
 import { auth, allow, hashPassword, audit } from "./security.js";
 import { config } from "./config.js";
 import { ageFromDob, normSex } from "./reportRules.js";
-import { escapeRegex } from "./util.js";
+import { escapeRegex, fuzzyScore } from "./util.js";
+import { DISEASE_TESTS } from "./data/diseaseTests.js";
+import { callAI, parseJsonLoose, pingAI } from "./ai.js";
+
+/** Generate a short secret access code (not derivable from Mongo id). */
+export function makeSecretCode(len = 10) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+/** Ensure a MedicalReport has a secretAccessCode; return it. */
+export async function ensureReportSecret(report) {
+  if (report.secretAccessCode) return report.secretAccessCode;
+  for (let i = 0; i < 5; i++) {
+    const code = makeSecretCode(10);
+    try {
+      report.secretAccessCode = code;
+      await report.save();
+      return code;
+    } catch (e) {
+      if (e && e.code === 11000) continue;
+      throw e;
+    }
+  }
+  throw new Error("Could not allocate secret code");
+}
+
+/** Ensure a Prescription has a secretAccessCode. */
+export async function ensureRxSecret(rx) {
+  if (rx.secretAccessCode) return rx.secretAccessCode;
+  for (let i = 0; i < 5; i++) {
+    const code = makeSecretCode(10);
+    try {
+      rx.secretAccessCode = code;
+      await rx.save();
+      return code;
+    } catch (e) {
+      if (e && e.code === 11000) continue;
+      throw e;
+    }
+  }
+  throw new Error("Could not allocate secret code");
+}
+
+/** Seed Disease collection from hard-coded DISEASE_TESTS if empty. */
+export async function seedDiseasesIfEmpty() {
+  const n = await Disease.countDocuments();
+  if (n > 0) return n;
+  const docs = DISEASE_TESTS.map(d => ({
+    names: d.names,
+    tests: d.tests.map(t => ({ name: t.name, reason: t.reason || "", priority: t.priority || "routine" })),
+    source: "seed",
+    active: true
+  }));
+  if (docs.length) await Disease.insertMany(docs);
+  return docs.length;
+}
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const mk = (minutes, limit, error) => rateLimit({ windowMs: minutes * 60000, limit, standardHeaders: true, legacyHeaders: false, message: { error } });
@@ -31,15 +90,8 @@ export function clinicalForSigning(rx) {
 }
 
 async function aiJson(system, payload, maxTokens = 1400) {
-  if (!config.openRouterKey) throw Object.assign(new Error("AI provider is not configured"), { status: 503 });
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${config.openRouterKey}`, "Content-Type": "application/json", "HTTP-Referer": config.clientOrigin, "X-Title": "MedAI Hospital" },
-    body: JSON.stringify({ model: config.openRouterModel, messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(payload) }], temperature: 0.2, max_tokens: maxTokens })
-  });
-  if (!r.ok) throw Object.assign(new Error("AI provider request failed"), { status: 502 });
-  const d = await r.json(); const raw = String(d.choices?.[0]?.message?.content || "");
-  try { return JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || "{}"); } catch { return {}; }
+  const raw = await callAI([{ role: "system", content: system }, { role: "user", content: JSON.stringify(payload) }], { temperature: 0.2, maxTokens });
+  return parseJsonLoose(raw) || {};
 }
 
 const isAbnormal = s => !!s && !/^(normal|ok|within|unknown|check|n\/a)/i.test(String(s).trim());
@@ -74,6 +126,32 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
     if (!c) return res.status(403).json({ error: "Open one of your active appointments or assigned reports first" });
     const p = c.patient;
     res.json({ prefill: c.prefill, patient: { name: p?.name, ageYears: ageFromDob(p?.dateOfBirth), sex: normSex(p?.gender), allergies: p?.allergies || [] } });
+  }));
+
+  // ================= Disease name -> suggested tests (click to add). Works even if the free AI is busy. =================
+  router.post("/ai/test-suggestions", auth, allow("doctor"), aiLim, wrap(async (req, res) => {
+    const dx = str(req.body.diagnosis, 200);
+    if (dx.length < 2) return res.status(400).json({ error: "Type the disease or diagnosis name first" });
+    const norm = n => String(n).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    // 1) DB diseases first (admin-editable), then fall back to seed checklist
+    await seedDiseasesIfEmpty();
+    const dbDiseases = await Disease.find({ active: true }).lean();
+    const sourceList = dbDiseases.length ? dbDiseases.map(d => ({ names: d.names, tests: d.tests })) : DISEASE_TESTS;
+    const ranked = sourceList.map(d => ({ d, s: fuzzyScore(dx, d.names) })).filter(x => x.s >= 60).sort((a, b) => b.s - a.s);
+    const matched = ranked.slice(0, 2).map(x => x.d.names[0]);
+    const out = new Map();
+    for (const { d } of ranked.slice(0, 2)) for (const t of d.tests) if (!out.has(norm(t.name))) out.set(norm(t.name), { name: t.name, reason: t.reason || "", priority: t.priority || "routine", source: "checklist" });
+    // 2) AI adds anything else
+    let aiNote = "", understood = "";
+    try {
+      const system = 'You help a licensed Bangladeshi doctor choose investigations. Given a diagnosis (may be misspelled, Bangla or Banglish), reply ONLY with JSON: {"diagnosis":"corrected standard name","tests":[{"name":"test name as ordered in Bangladesh labs","reason":"max 12 words","priority":"routine|soon|urgent"}]}. Give 4-8 relevant, commonly available tests, most important first. Never suggest medicines.';
+      const ai = await aiJson(system, { diagnosis: dx, alreadyListed: [...out.values()].map(t => t.name) }, 700);
+      understood = str(ai.diagnosis, 120);
+      for (const t of (ai.tests || []).slice(0, 8)) { const name = str(t.name, 100); if (name.length < 2 || out.has(norm(name))) continue; out.set(norm(name), { name, reason: str(t.reason, 160), priority: ["routine", "soon", "urgent"].includes(t.priority) ? t.priority : "routine", source: "ai" }); }
+    } catch (e) { aiNote = out.size ? "AI is busy, showing the standard checklist only." : e.message; }
+    if (!out.size) return res.status(503).json({ error: aiNote || "No suggestion found. Check the spelling or try again in a minute." });
+    await audit(req, "ai.test_suggestions", "User", req.user.id, { tests: out.size });
+    res.json({ diagnosis: understood || matched[0] || dx, tests: [...out.values()].slice(0, 14), note: aiNote, disclaimer: "Suggestions are options for the treating doctor only. Choose tests by clinical judgement." });
   }));
 
   // ================= AI: medicines + tests + diagnosis (replaces the old medicine-only route) =================
@@ -127,21 +205,22 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
     }
     return out.sort((x, y) => Number(y.stillAbnormal) - Number(x.stillAbnormal)).slice(0, 40);
   }
-  router.post("/ai/multi-report-analysis", auth, allow("patient", "doctor"), aiLim, wrap(async (req, res) => {
-    const ids = Array.isArray(req.body.reportIds) ? [...new Set(req.body.reportIds.map(String))].filter(validId).slice(0, 10) : [];
-    if (ids.length < 2) return res.status(400).json({ error: "Select at least 2 reports to analyse together" });
+  const bad = (m, s = 400) => Object.assign(new Error(m), { status: s, expose: true });
+  async function runMultiAnalysis(req, opts = {}) {
+    const ids = Array.isArray(opts.ids) ? [...new Set(opts.ids.map(String))].filter(validId).slice(0, 10) : [];
+    if (ids.length < 2) throw bad("Select at least 2 reports to analyse together", 400);
     const isDoc = req.user.role === "doctor";
-    const patientId = isDoc ? req.body.patientId : req.user.id;
-    if (!validId(patientId)) return res.status(400).json({ error: "Patient is required" });
-    if (isDoc && !(await canSee(req.user.id, patientId))) return res.status(403).json({ error: "You can only analyse reports of your own patients" });
-    const reports = (await MedicalReport.find({ _id: { $in: ids }, patientId, "findings.0": { $exists: true } })).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    if (reports.length < 2) return res.status(400).json({ error: "At least 2 of the selected reports must already be analysed (they need test values)" });
+    const patientId = isDoc ? opts.patientId : req.user.id;
+    if (!validId(patientId)) throw bad("Patient is required", 400);
+    if (isDoc && !(await canSee(req.user.id, patientId))) throw bad("You can only analyse reports of your own patients", 403);
+    const reports = (await MedicalReport.find({ _id: { $in: ids }, patientId, $or: [{ "findings.0": { $exists: true } }, { "aiStructured.summary": { $exists: true, $ne: "" } }] })).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    if (reports.length < 2) throw bad("At least 2 of the selected reports must already be analysed by AI", 400);
     const patient = await User.findById(patientId).select("name dateOfBirth gender allergies currentMedicines medicalHistory");
     const trends = buildTrends(reports);
-    const lang = req.body.lang === "bn" ? "bn" : "en";
+    const lang = opts.lang === "bn" ? "bn" : "en";
     const payload = {
       patient: { ageYears: ageFromDob(patient?.dateOfBirth), sex: normSex(patient?.gender), history: str(patient?.medicalHistory, 600), currentMedicines: patient?.currentMedicines || [], allergies: patient?.allergies || [] },
-      reports: reports.map(r => ({ date: fmtD(r.signedAt || r.createdAt), type: r.docType, abnormal: compactFindings(r), valuesChecked: (r.findings || []).length })),
+      reports: reports.map(r => ({ date: fmtD(r.signedAt || r.createdAt), type: r.docType, abnormal: compactFindings(r), valuesChecked: (r.findings || []).length, aiSummary: str(r.aiStructured?.summary, 500) })),
       trendsAcrossReports: trends.slice(0, 25).map(t => ({ test: t.name, direction: t.direction, changePct: t.changePct, stillAbnormal: t.stillAbnormal, values: t.points.map(p => `${p.date}: ${p.value}`) })), language: lang
     };
     const system = 'You help a patient and their licensed doctor understand SEVERAL medical reports together. Reply ONLY with JSON: {"summary":"3-5 sentences, plain words","patterns":["cross-report patterns"],"possibleConditions":[{"name":"","likelihood":"low|moderate|high","evidence":["values that support it"],"note":"what to confirm"}],"suggestedSpecialty":"","suggestedTests":[{"name":"","reason":""}],"urgency":"routine|soon|urgent","redFlags":["only if values are dangerously abnormal"]}. Possible conditions are possibilities to discuss with a doctor, NOT a diagnosis. Maximum 5. Base ONLY on the supplied values; if data is insufficient say so. Never give doses or medicine names. Write all text in ' + (lang === "bn" ? "Bangla (Bengali script), keeping test names in English" : "English") + ".";
@@ -153,11 +232,15 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
       urgency: ["routine", "soon", "urgent"].includes(ai.urgency) ? ai.urgency : "routine", redFlags: (ai.redFlags || []).slice(0, 5).map(x => str(x, 200))
     };
     if (reports.some(r => /urgent|critical|emergency/i.test(String(r.urgencyLevel || "")))) clean.urgency = "urgent"; // deterministic rules can raise, never lower
-    const doctorId = isDoc ? req.user.id : (reports.slice().reverse().find(r => r.doctorId)?.doctorId || null);
+    const doctorId = isDoc ? req.user.id : (opts.doctorId || reports.slice().reverse().find(r => r.doctorId)?.doctorId || null);
     const a = await MultiAnalysis.create({ patientId, doctorId, requestedBy: req.user.id, requestedByRole: req.user.role, reportIds: reports.map(r => r._id), trends, ai: clean });
     if (doctorId) { if (!isDoc) await notify(doctorId, "multi_analysis_review", "Combined report analysis to review", `${patient?.name || "A patient"} analysed ${reports.length} reports together. Please review the AI result.`, "MultiAnalysis", a.id); }
     else for (const ad of await User.find({ role: "admin", status: "active" }).select("_id")) await notify(ad._id, "multi_analysis_review", "Combined analysis needs a doctor", `${patient?.name || "A patient"} has a combined report analysis with no doctor assigned.`, "MultiAnalysis", a.id);
     await audit(req, "ai.multi_report_analysis", "MultiAnalysis", a.id, { reports: reports.length });
+    return a;
+  }
+  router.post("/ai/multi-report-analysis", auth, allow("patient", "doctor"), aiLim, wrap(async (req, res) => {
+    const a = await runMultiAnalysis(req, { ids: req.body.reportIds, patientId: req.body.patientId, lang: req.body.lang });
     res.status(201).json({ analysis: a });
   }));
   const shapeForPatient = a => { const o = a.toObject(); return { ...o, ai: o.status === "approved" ? undefined : o.ai, doctorFinal: o.status === "approved" ? o.doctorFinal : undefined, draft: o.status === "pending_doctor_review" ? o.ai : undefined }; };
@@ -175,7 +258,7 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
     const uniq = [...new Set([...ids, ...more].map(String))];
     const users = await User.find({ _id: { $in: uniq } }).select("name");
     const out = [];
-    for (const u of users) { const reports = await MedicalReport.find({ patientId: u._id, "findings.0": { $exists: true } }).sort({ createdAt: -1 }).limit(15).select("docType createdAt signedAt urgencyLevel"); if (reports.length >= 2) out.push({ _id: u._id, name: u.name, reports }); }
+    for (const u of users) { const reports = await MedicalReport.find({ patientId: u._id, $or: [{ "findings.0": { $exists: true } }, { "aiStructured.summary": { $exists: true, $ne: "" } }] }).sort({ createdAt: -1 }).limit(15).select("docType createdAt signedAt urgencyLevel"); if (reports.length >= 2) out.push({ _id: u._id, name: u.name, reports }); }
     res.json({ patients: out });
   }));
   router.post("/multi-analyses/:id/review", auth, allow("doctor"), wrap(async (req, res) => {
@@ -219,7 +302,7 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
     else if (action === "resolve_all_errors") { const r = await SystemError.updateMany({ resolvedAt: null }, { $set: { resolvedAt: new Date(), resolvedBy: req.user.id } }); message = `${r.modifiedCount} errors marked resolved.`; }
     else if (action === "clear_stale_calls") { const r = await CallSignal.deleteMany({ createdAt: { $lt: new Date(Date.now() - 3600 * 1000) } }); message = `${r.deletedCount} old call signals removed. New calls will start clean.`; }
     else if (action === "test_email") { const me = await User.findById(req.user.id).select("email contactEmail"); const ok = await sendMailSafe(me.contactEmail || me.email, "MedAI Hospital test email", "This is a test email from the MedAI admin System tab. Email sending works."); message = ok ? "Test email sent to " + (me.contactEmail || me.email) : "Email failed. Check SMTP_USER / SMTP_PASS (Gmail app password, no spaces)."; }
-    else if (action === "test_ai") { try { const o = await aiJson('Reply ONLY with JSON {"ok":true}', { ping: 1 }, 20); message = o.ok ? "AI provider works." : "AI answered but unexpectedly. Try again."; } catch (e) { message = "AI test failed: " + e.message; } }
+    else if (action === "test_ai") { try { const o = await pingAI(); message = `AI provider works (${o.ms} ms). Models in use: ${o.models.join(" -> ")}`; } catch (e) { message = "AI test failed: " + e.message + (e.tried?.length ? " [" + e.tried.join(", ") + "]" : ""); } }
     else return res.status(400).json({ error: "Unknown fix action" });
     await audit(req, "system.fix." + action, "System", ""); res.json({ message });
   }));
@@ -260,4 +343,172 @@ export function installV38(router, { notify, ACCESS, PRESCRIBE, sendMailSafe }) 
     await AuditEvent.create({ actorId: u._id, action: "admin_recovery.password_reset", targetType: "User", targetId: String(u._id), ip: req.ip }).catch(() => {});
     res.json({ message: "Admin password reset. Sign in with the new password." });
   }));
+
+  // ================= V3.8.3 Disease knowledge base (admin) =================
+  router.get("/admin/diseases", auth, allow("admin"), wrap(async (req, res) => {
+    await seedDiseasesIfEmpty();
+    const q = str(req.query.q, 80);
+    let list = await Disease.find({}).sort({ updatedAt: -1 }).lean();
+    if (q) {
+      const scored = list.map(d => ({ d, s: fuzzyScore(q, d.names) })).filter(x => x.s > 0);
+      scored.sort((a, b) => b.s - a.s);
+      list = scored.map(x => x.d);
+    }
+    res.json({ diseases: list });
+  }));
+
+  router.post("/admin/diseases", auth, allow("admin"), wrap(async (req, res) => {
+    const names = Array.isArray(req.body.names) ? req.body.names.map(n => str(n, 80)).filter(Boolean) : [];
+    if (!names.length) return res.status(400).json({ error: "At least one disease name is required" });
+    const tests = Array.isArray(req.body.tests) ? req.body.tests.map(t => ({
+      name: str(t.name, 120), reason: str(t.reason, 200), priority: ["routine", "soon", "urgent"].includes(t.priority) ? t.priority : "routine"
+    })).filter(t => t.name) : [];
+    const doc = await Disease.create({
+      names, tests, notes: str(req.body.notes, 2000), active: req.body.active !== false,
+      source: req.body.source === "json_import" ? "json_import" : req.body.source === "ai_prompt" ? "ai_prompt" : "admin",
+      updatedBy: req.user.id
+    });
+    await audit(req, "admin.disease_create", "Disease", doc.id, { names });
+    res.status(201).json({ disease: doc });
+  }));
+
+  router.patch("/admin/diseases/:id", auth, allow("admin"), wrap(async (req, res) => {
+    if (!validId(req.params.id)) return res.status(404).json({ error: "Not found" });
+    const d = await Disease.findById(req.params.id); if (!d) return res.status(404).json({ error: "Not found" });
+    if (Array.isArray(req.body.names)) d.names = req.body.names.map(n => str(n, 80)).filter(Boolean);
+    if (Array.isArray(req.body.tests)) d.tests = req.body.tests.map(t => ({
+      name: str(t.name, 120), reason: str(t.reason, 200), priority: ["routine", "soon", "urgent"].includes(t.priority) ? t.priority : "routine"
+    })).filter(t => t.name);
+    if (req.body.notes !== undefined) d.notes = str(req.body.notes, 2000);
+    if (typeof req.body.active === "boolean") d.active = req.body.active;
+    d.updatedBy = req.user.id;
+    await d.save();
+    await audit(req, "admin.disease_update", "Disease", d.id, {});
+    res.json({ disease: d });
+  }));
+
+  router.delete("/admin/diseases/:id", auth, allow("admin"), wrap(async (req, res) => {
+    if (!validId(req.params.id)) return res.status(404).json({ error: "Not found" });
+    const d = await Disease.findByIdAndDelete(req.params.id); if (!d) return res.status(404).json({ error: "Not found" });
+    await audit(req, "admin.disease_delete", "Disease", d.id, { names: d.names });
+    res.json({ message: "Disease removed" });
+  }));
+
+  // JSON bulk import for diseases
+  router.post("/admin/diseases/import", auth, allow("admin"), wrap(async (req, res) => {
+    const rows = Array.isArray(req.body.diseases) ? req.body.diseases : Array.isArray(req.body) ? req.body : [];
+    if (!rows.length) return res.status(400).json({ error: "Provide a diseases array" });
+    let done = 0;
+    for (const row of rows.slice(0, 200)) {
+      const names = Array.isArray(row.names) ? row.names.map(n => str(n, 80)).filter(Boolean) : (row.name ? [str(row.name, 80)] : []);
+      if (!names.length) continue;
+      const tests = Array.isArray(row.tests) ? row.tests.map(t => ({
+        name: str(t.name || t, 120), reason: str(t.reason, 200), priority: ["routine", "soon", "urgent"].includes(t.priority) ? t.priority : "routine"
+      })).filter(t => t.name) : [];
+      await Disease.create({ names, tests, notes: str(row.notes, 2000), active: true, source: "json_import", updatedBy: req.user.id });
+      done++;
+    }
+    await audit(req, "admin.disease_import", "Disease", null, { count: done });
+    res.json({ message: `Imported ${done} diseases`, count: done });
+  }));
+
+  // Prompt template for AI-assisted disease entry
+  router.get("/admin/diseases/prompt-template", auth, allow("admin"), wrap(async (_req, res) => {
+    const template = `You are helping build a clinical knowledge base for a Bangladeshi hospital system.
+Given a disease or condition name (may be in Bangla or English), reply ONLY with JSON in this exact shape:
+
+{
+  "names": ["English name", "common alias", "বাংলা নাম"],
+  "tests": [
+    { "name": "Test name as ordered in BD labs", "reason": "why, max 12 words", "priority": "routine|soon|urgent" }
+  ],
+  "notes": "optional short clinical note"
+}
+
+Rules:
+- 4 to 8 commonly available tests in Bangladesh, most important first.
+- Never suggest medicines or doses.
+- Keep reason under 12 words.
+- Include at least one Bangla name when possible.`;
+    res.json({ prompt: template, example: {
+      names: ["dengue", "dengue fever", "ডেঙ্গু"],
+      tests: [
+        { name: "CBC with platelet count", reason: "Platelet and haematocrit trend", priority: "soon" },
+        { name: "Dengue NS1 antigen", reason: "Early diagnosis day 1-5", priority: "soon" }
+      ],
+      notes: "Monitor platelets closely in febrile phase."
+    }});
+  }));
+
+  // ================= Secret access code (doctor/admin only) =================
+  // Get or create secret code for a report (never sent to patient)
+  router.get("/reports/:id/secret-code", auth, allow("doctor", "admin"), wrap(async (req, res) => {
+    if (!validId(req.params.id)) return res.status(404).json({ error: "Not found" });
+    const r = await MedicalReport.findById(req.params.id);
+    if (!r) return res.status(404).json({ error: "Not found" });
+    if (req.user.role === "doctor" && r.doctorId && String(r.doctorId) !== req.user.id) {
+      return res.status(403).json({ error: "Not your assigned report" });
+    }
+    const code = await ensureReportSecret(r);
+    res.json({ code, resourceType: "report", resourceId: r.id, qrPayload: `medai:report:${code}` });
+  }));
+
+  router.get("/prescriptions/:id/secret-code", auth, allow("doctor", "admin"), wrap(async (req, res) => {
+    if (!validId(req.params.id)) return res.status(404).json({ error: "Not found" });
+    const rx = await Prescription.findById(req.params.id);
+    if (!rx) return res.status(404).json({ error: "Not found" });
+    if (req.user.role === "doctor" && String(rx.doctorId) !== req.user.id) {
+      return res.status(403).json({ error: "Not your prescription" });
+    }
+    const code = await ensureRxSecret(rx);
+    res.json({ code, resourceType: "prescription", resourceId: rx.id, qrPayload: `medai:rx:${code}` });
+  }));
+
+  // Resolve code → open the file/report (doctor/admin only)
+  router.post("/access-by-code", auth, allow("doctor", "admin"), wrap(async (req, res) => {
+    const code = str(req.body.code, 20).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (code.length < 6) return res.status(400).json({ error: "Enter the full secret code" });
+    let report = await MedicalReport.findOne({ secretAccessCode: code })
+      .populate("originalFileId", "originalName mimeType")
+      .populate("aiPdfFileId", "originalName")
+      .populate("finalPdfFileId", "originalName")
+      .populate("patientId", "name email");
+    let rx = null;
+    if (!report) {
+      rx = await Prescription.findOne({ secretAccessCode: code })
+        .populate("pdfFileId", "originalName")
+        .populate("patientId", "name email");
+    }
+    if (!report && !rx) return res.status(404).json({ error: "Code not found" });
+    await AccessAudit.create({
+      actorId: req.user.id, actorRole: req.user.role,
+      resourceType: report ? "report" : "prescription",
+      resourceId: report ? report._id : rx._id,
+      codeUsed: code, action: "open", ip: req.ip
+    }).catch(() => {});
+    if (report) {
+      return res.json({
+        type: "report",
+        id: report.id,
+        patient: report.patientId ? { name: report.patientId.name, email: report.patientId.email } : null,
+        status: report.status,
+        docType: report.docType,
+        files: {
+          original: report.originalFileId ? { id: report.originalFileId._id, name: report.originalFileId.originalName } : null,
+          aiPdf: report.aiPdfFileId || null,
+          finalPdf: report.finalPdfFileId || null
+        },
+        simpleSummary: report.simpleSummary || null
+      });
+    }
+    res.json({
+      type: "prescription",
+      id: rx.id,
+      patient: rx.patientId ? { name: rx.patientId.name, email: rx.patientId.email } : null,
+      status: rx.status,
+      pdf: rx.pdfFileId ? { id: rx.pdfFileId._id, name: rx.pdfFileId.originalName } : null
+    });
+  }));
+
+  return { runMultiAnalysis };
 }

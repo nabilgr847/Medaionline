@@ -10,7 +10,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
   const [tab, setTab] = useTabHistory("doctors", "adminTab");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["diseases", "Diseases"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
     {tab === "schedule" && <AdminSchedules api={api} setMessage={setMessage} />}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
@@ -22,6 +22,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
     {tab === "monitor" && <LiveMonitoring api={api} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineReview api={api} setMessage={setMessage} />}
     {tab === "import" && <ImportMedicines api={api} setMessage={setMessage} />}
+    {tab === "diseases" && <DiseaseManager api={api} setMessage={setMessage} />}
     {tab === "specialties" && <SpecialtiesEditor api={api} setMessage={setMessage} />}
     {tab === "banner" && <BannerEditor api={api} setMessage={setMessage} />}
     {tab === "system" && <AdminSystem api={api} setMessage={setMessage} />}
@@ -58,7 +59,7 @@ function ReportsPanel({ api, token, setMessage }: { api: Api; token: string; set
       const d = await api("/admin/reports?" + qs.toString()); setRows(d.reports || []); setDoctors(d.doctors || []);
     } catch (e: any) { setMessage(e.message); }
   }
-  useEffect(() => { load(); }, [filter]);
+  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t); }, [filter, q]);
   async function dl(id: string, name: string) { try { await downloadFile(token, id, name); } catch (e: any) { setMessage(e.message); } }
   async function assign(id: string) {
     if (!pick[id]) { setMessage("Choose a doctor first."); return; }
@@ -68,12 +69,13 @@ function ReportsPanel({ api, token, setMessage }: { api: Api; token: string; set
     <article className="full"><h3>📄 Patient reports</h3>
       <p className="muted">Every uploaded report with its AI analysis and doctor review. Opening a patient file is recorded in the audit log.</p>
       <div className="row"><select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All reports</option><option value="pending">Doctor review: Pending</option><option value="approved">Doctor review: Approved</option><option value="rejected">Doctor review: Rejected</option><option value="unassigned">No doctor assigned</option></select>
-        <input placeholder="Search patient name or email" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} /><button className="outline" onClick={load}>Search</button></div>
+        <input placeholder="Search name, email, test, doctor, file or report code (spelling mistakes are OK)" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} /><button className="outline" onClick={load}>Search</button></div>
     </article>
     {!rows.length && <article className="full"><p className="muted">No reports found.</p></article>}
+    {rows.length === 0 && <article className="full"><p className="muted">No report matches. Try fewer letters or another word.</p></article>}
     {rows.map((r) => <article className="full" key={r._id}>
       <h3>{r.patient?.name || "Unknown patient"} <span className="muted">· {r.patient?.email || ""}{r.patient?.phone ? " · " + r.patient.phone : ""}</span></h3>
-      <p className="muted">Uploaded: {fmtDate(r.createdAt)} · Status: {label(r.status)}{r.urgencyLevel ? " · Priority: " + r.urgencyLevel : ""}</p>
+      <p className="muted">Code: <b>{r.code}</b> · Uploaded: {fmtDate(r.createdAt)} · Status: {label(r.status)}{r.urgencyLevel ? " · Priority: " + r.urgencyLevel : ""}</p>
       <p><b>AI analysis:</b> {ANALYSIS_LABEL[r.analysisState] || r.analysisState} &nbsp; <b>Doctor review:</b> {REVIEW_LABEL[r.reviewState] || r.reviewState}</p>
       <p><b>Doctor:</b> {r.doctor ? `Dr. ${r.doctor.name}${r.doctor.specialty ? " (" + r.doctor.specialty + ")" : ""}` : "Not assigned yet"}</p>
       {r.reviewComment && <p className="muted">Doctor comment: {r.reviewComment}</p>}
@@ -418,5 +420,132 @@ function RequestsPanel({ api, setMessage }: { api: Api; setMessage: (s: string) 
           <div className="row"><button className="primary" disabled={busy === u._id} onClick={() => issueLogin(u)}>📧 Approve &amp; send to {u.contactEmail || u.email}</button><button className="outline" onClick={() => setIssue(null)}>Cancel</button></div></div>}
       </div>)}
       <p className="muted">Patients request an account with their own email and password. You approve it and they are emailed (or you tell them yourself if email is not set up). You can also give them a new login ID or password. Doctors are approved in “Doctor verification”; after that you can create new login details here.</p></article>
+  </div>;
+}
+
+/** V3.8.3: Admin disease knowledge base — add / edit / JSON import / prompt template */
+function DiseaseManager({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+  const [list, setList] = useState<any[]>([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [edit, setEdit] = useState<any>(null);
+  const [prompt, setPrompt] = useState("");
+  const [jsonText, setJsonText] = useState("");
+  const [names, setNames] = useState("");
+  const [testsText, setTestsText] = useState("");
+  const [notes, setNotes] = useState("");
+
+  async function load(query = q) {
+    setLoading(true);
+    try {
+      const qs = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+      const d = await api("/admin/diseases" + qs);
+      setList(d.diseases || []);
+    } catch (e: any) { setMessage(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  function resetForm() { setNames(""); setTestsText(""); setNotes(""); setEdit(null); setAdding(false); }
+
+  async function save() {
+    const nameList = names.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    if (!nameList.length) { setMessage("At least one disease name is required"); return; }
+    const tests = testsText.split("\n").map(line => {
+      const [name, reason, priority] = line.split("|").map(s => (s || "").trim());
+      return name ? { name, reason: reason || "", priority: priority || "routine" } : null;
+    }).filter(Boolean);
+    try {
+      if (edit?._id) {
+        await api(`/admin/diseases/${edit._id}`, { method: "PATCH", body: json({ names: nameList, tests, notes }) });
+        setMessage("Disease updated");
+      } else {
+        await api("/admin/diseases", { method: "POST", body: json({ names: nameList, tests, notes }) });
+        setMessage("Disease added");
+      }
+      resetForm(); load();
+    } catch (e: any) { setMessage(e.message); }
+  }
+
+  function startEdit(d: any) {
+    setEdit(d); setAdding(true);
+    setNames((d.names || []).join(", "));
+    setTestsText((d.tests || []).map((t: any) => [t.name, t.reason || "", t.priority || "routine"].join(" | ")).join("\n"));
+    setNotes(d.notes || "");
+  }
+
+  async function del(id: string, label: string) {
+    if (!confirm(`Delete "${label}"?`)) return;
+    try { await api(`/admin/diseases/${id}`, { method: "DELETE" }); setMessage("Disease removed"); load(); }
+    catch (e: any) { setMessage(e.message); }
+  }
+
+  async function loadPrompt() {
+    try { const d = await api("/admin/diseases/prompt-template"); setPrompt(d.prompt || ""); setMessage("Prompt template loaded — copy and use with any AI"); }
+    catch (e: any) { setMessage(e.message); }
+  }
+
+  async function importJson() {
+    try {
+      const data = JSON.parse(jsonText);
+      const diseases = Array.isArray(data) ? data : data.diseases || [];
+      const d = await api("/admin/diseases/import", { method: "POST", body: json({ diseases }) });
+      setMessage(d.message || "Import done"); setJsonText(""); load();
+    } catch (e: any) { setMessage(e.message || "Invalid JSON"); }
+  }
+
+  function downloadTemplate() {
+    const sample = {
+      diseases: [{
+        names: ["dengue", "dengue fever", "ডেঙ্গু"],
+        tests: [
+          { name: "CBC with platelet count", reason: "Platelet trend", priority: "soon" },
+          { name: "Dengue NS1 antigen", reason: "Early diagnosis", priority: "soon" }
+        ],
+        notes: "Monitor platelets in febrile phase"
+      }]
+    };
+    const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "disease-import-template.json"; a.click();
+  }
+
+  return <div className="grid">
+    <article className="full">
+      <h3>Disease knowledge base</h3>
+      <p className="muted">Add or edit conditions used for “Find tests by disease name”. Doctors get these checklists even when free AI is busy. Patient never sees this list.</p>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <input placeholder="Search disease…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && load()} />
+        <button className="outline" onClick={() => load()}>Search</button>
+        <button className="primary" onClick={() => { resetForm(); setAdding(true); }}>＋ Add disease</button>
+        <button className="outline" onClick={loadPrompt}>Download prompt template</button>
+        <button className="outline" onClick={downloadTemplate}>Download JSON template</button>
+      </div>
+
+      {adding && <div className="disease-card" style={{ background: "#f8fcfd" }}>
+        <h4>{edit ? "Edit disease" : "New disease"}</h4>
+        <label>Names (comma or new line, include Bangla)<textarea rows={2} value={names} onChange={e => setNames(e.target.value)} placeholder="dengue, dengue fever, ডেঙ্গু" /></label>
+        <label>Tests (one per line: name | reason | priority)<textarea rows={5} value={testsText} onChange={e => setTestsText(e.target.value)} placeholder={"CBC with platelet count | Platelet trend | soon\nDengue NS1 antigen | Early diagnosis | soon"} /></label>
+        <label>Notes<textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} /></label>
+        <div className="row"><button className="primary" onClick={save}>Save</button><button className="outline" onClick={resetForm}>Cancel</button></div>
+      </div>}
+
+      {prompt && <div className="disease-card"><b>AI prompt template</b><pre style={{ whiteSpace: "pre-wrap", fontSize: ".85rem" }}>{prompt}</pre>
+        <button className="outline" onClick={() => { navigator.clipboard?.writeText(prompt); setMessage("Prompt copied"); }}>Copy prompt</button></div>}
+
+      <details style={{ margin: "12px 0" }}><summary>Import from JSON</summary>
+        <textarea rows={6} value={jsonText} onChange={e => setJsonText(e.target.value)} placeholder='{"diseases":[{"names":["..."],"tests":[{"name":"...","reason":"...","priority":"routine"}]}]}' />
+        <button className="primary" onClick={importJson}>Import JSON</button>
+      </details>
+
+      {loading && <p className="muted">Loading…</p>}
+      {!loading && !list.length && <p className="muted">No diseases yet. Add one or import JSON.</p>}
+      {list.map(d => <div className="disease-card" key={d._id}>
+        <div className="names">{(d.names || []).join(" · ")} {!d.active && <span className="muted">(inactive)</span>}</div>
+        <div className="tests">{(d.tests || []).map((t: any, i: number) => <span key={i}>{t.name}</span>)}</div>
+        {d.notes && <p className="muted">{d.notes}</p>}
+        <div className="row"><button className="outline" onClick={() => startEdit(d)}>Edit</button><button className="outline" onClick={() => del(d._id, d.names?.[0])}>Delete</button></div>
+      </div>)}
+    </article>
   </div>;
 }

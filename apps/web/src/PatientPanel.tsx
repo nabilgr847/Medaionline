@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Api, json, postForm, downloadFile, fmtDate, fmtDay, fmtSize, label, listFromText } from "./api";
 import ChatAI, { FindingsList, ReportView } from "./ChatAI";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
-import { PatientCombined } from "./v38";
+import { PatientCombined, SendReports } from "./v38";
 import { printRx } from "./print";
 import { useTabHistory } from "./tabHistory";
 import TeleVisitCall from "./TeleVisitCall";
@@ -20,7 +20,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
     <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
-    {tab === "combined" && <PatientCombined api={api} setMessage={setMessage} />}
+    {tab === "combined" && <PatientCombined api={api} token={token} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}
     {tab === "messages" && <DirectMessages api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "nearby" && <NearbyCare />}
@@ -85,19 +85,28 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
 
 function Reports({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
   const [openRid, setOpenRid] = useState("");
-  const [files, setFiles] = useState<any[]>([]); const [reports, setReports] = useState<any[]>([]); const [file, setFile] = useState<File | null>(null); const [busy, setBusy] = useState(false); const [reportText, setReportText] = useState(""); const [reportAnalysis, setReportAnalysis] = useState("");
+  const [files, setFiles] = useState<any[]>([]); const [reports, setReports] = useState<any[]>([]); const [files2, setFiles2] = useState<File[]>([]); const [busy, setBusy] = useState(false); const [reportText, setReportText] = useState(""); const [reportAnalysis, setReportAnalysis] = useState("");
   async function load() { try { const d = await api("/files/mine"); setFiles((d.files || []).filter((f: any) => f.category === "patient_report")); const r=await api("/reports/mine");setReports(r.reports||[]); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
   async function send() {
-    if (!file) return; const fd = new FormData(); fd.append("file", file); fd.append("category", "patient_report"); setBusy(true);
-    try { await postForm("/files/upload", fd, token); setFile(null); setMessage("Report uploaded privately. Your assigned doctor can view it."); load(); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); }
+    if (!files2.length) return; setBusy(true); let ok = 0;
+    for (const f of files2) { try { const fd = new FormData(); fd.append("file", f); fd.append("category", "patient_report"); await postForm("/files/upload", fd, token); ok++; } catch (e: any) { setMessage(`${f.name}: ${e.message}`); } }
+    if (ok) setMessage(`${ok} report file${ok > 1 ? "s" : ""} uploaded privately. Your assigned doctor can view ${ok > 1 ? "them" : "it"}.`);
+    setFiles2([]); setBusy(false); load();
+  }
+  async function analyzeFiles() {
+    if (!files2.length) return; setBusy(true); let out = "";
+    for (const f of files2) { try { const fd = new FormData(); fd.append("file", f); const up = await postForm("/files/upload", fd, token); const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) }); out += `${f.name}\n${an.report.aiExplanation}\nStatus: ${an.report.status}\n\n`; } catch (e: any) { out += `${f.name}: ${e.message}\n\n`; } }
+    setReportAnalysis(out.trim()); setFiles2([]); setBusy(false); load();
   }
   async function remove(id: string) { if (!confirm("Delete this report permanently?")) return; try { await api(`/files/${id}`, { method: "DELETE" }); load(); } catch (e: any) { setMessage(e.message); } }
   async function analyzeReport() { setBusy(true); try { const d = await api("/ai/report-analysis", { method: "POST", body: json({ reportText }) }); setReportAnalysis(d.answer + "\n\n" + d.disclaimer); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
   return <div className="grid">
     <article><h3>Upload a report</h3><p className="muted">PDF, JPG, PNG or WEBP. Only you and the doctor assigned to your appointment can open patient reports.</p>
-      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-      <div className="row"><button className="primary" onClick={send} disabled={!file || busy}>{busy ? "Working…" : "Upload report"}</button><button className="outline" onClick={async()=>{if(!file)return;const fd=new FormData();fd.append("file",file);setBusy(true);try{const uploaded=await postForm("/files/upload",fd,token);const analyzed=await api(`/reports/${uploaded.file.id}/analyze`,{method:"POST",body:json({})});setReportAnalysis(analyzed.report.aiExplanation+"\n\nStatus: "+analyzed.report.status+"\n\n"+analyzed.disclaimer);load();}catch(e:any){setMessage(e.message);}finally{setBusy(false);}}} disabled={!file || busy}>{busy ? "Analyzing…" : "Analyze PDF/image"}</button></div></article>
+      <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => { setFiles2(Array.from(e.target.files || []).slice(0, 10)); }} />
+      {files2.length > 0 && <p className="muted">{files2.length} file{files2.length > 1 ? "s" : ""} selected</p>}
+      <div className="row"><button className="primary" onClick={send} disabled={!files2.length || busy}>{busy ? "Working…" : "Upload report(s)"}</button><button className="outline" onClick={analyzeFiles} disabled={!files2.length || busy}>{busy ? "Analyzing…" : "Analyze each file"}</button></div></article>
+    <SendReports api={api} token={token} setMessage={setMessage} onDone={load} />
     <article><h3>Upload audio or video</h3><p className="muted">MP3, M4A, OGG, WAV, MP4, WEBM or MOV. Uploading stores the file privately; it does not automatically transcribe or analyze it.</p><MediaUploader api={api} token={token} setMessage={setMessage} /></article>
     <article className="full"><h3>Explain report text with AI</h3><p className="muted">PDF text extraction/scanned-page OCR is used for PDFs. Report images are sent to the configured vision-capable AI model and cross-checked with Bangla/English OCR. OCR/vision may misread numbers; verify every value against the original. Text analysis is also available below.</p><textarea rows={5} value={reportText} onChange={e => setReportText(e.target.value)} placeholder="Paste test name, result, unit and reference range…" /><button className="primary" disabled={busy || reportText.trim().length < 20} onClick={analyzeReport}>{busy ? "Analyzing…" : "Explain report text"}</button>{reportAnalysis && <pre className="answer">{reportAnalysis}</pre>}</article>
     <article><h3>My reports</h3>{files.length === 0 && reports.length===0 && <p className="muted">No reports uploaded.</p>}

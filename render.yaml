@@ -30,6 +30,12 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: OPENROUTER_FALLBACK_MODELS
+        sync: false
+      - key: OPENROUTER_VISION_MODEL
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

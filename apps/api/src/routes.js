@@ -12,13 +12,14 @@ import os from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync=promisify(execFile);
-import { escapeRegex, detectMime, detectMimeFromBytes } from "./util.js";
+import { escapeRegex, detectMime, detectMimeFromBytes, fuzzyScore } from "./util.js";
 import { verifyFindings, urgency, ageFromDob, normSex } from "./reportRules.js";
 import { checkRedFlags } from "./safety.js";
 import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from "./pdf.js";
 import { z } from "zod";
+import { callAI, parseJsonLoose, pingAI } from "./ai.js";
 import { installV38, cleanClinical, clinicalForSigning } from "./v38.js";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
@@ -51,7 +52,7 @@ const CLOSED_STATUSES=["completed","cancelled","rejected"];
 const mkLimiter=(minutes,limit,error)=>rateLimit({windowMs:minutes*60*1000,limit,standardHeaders:true,legacyHeaders:false,message:{error}});
 const loginLimiter=mkLimiter(15,20,"Too many sign-in attempts. Try again later.");
 const applyLimiter=mkLimiter(60,10,"Too many submissions. Try again later.");
-const aiLimiter=mkLimiter(60,20,"AI question limit reached. Try again later.");
+const aiLimiter=mkLimiter(60,Number(process.env.AI_LIMIT_PER_HOUR||80),"AI limit reached for this hour. Please try again later.");
 const otpLimiter=mkLimiter(15,15,"Too many attempts. Try again in a few minutes.");
 const DUMMY_HASH=await hashPassword("timing-equalisation-only");
 
@@ -266,7 +267,9 @@ router.patch("/admin/doctors/:id/availability",auth,allow("admin"),wrap(async(re
 }));
 
 router.get("/admin/appointments",auth,allow("admin"),wrap(async(req,res)=>{
-  const appts=await Appointment.find({doctorId:{$ne:null}}).sort({updatedAt:-1}).limit(150).populate("patientId","name email").populate("doctorId","name email").select("patientId doctorId status scheduledAt consultationType problem updatedAt").lean();
+  const q=String(req.query.q||"").trim().slice(0,100);
+  let appts=await Appointment.find({doctorId:{$ne:null}}).sort({updatedAt:-1}).limit(q?600:150).populate("patientId","name email").populate("doctorId","name email").select("patientId doctorId status scheduledAt consultationType problem updatedAt").lean();
+  if(q){const sc=appts.map(a=>({a,s:fuzzyScore(q,[a.patientId?.name,a.patientId?.email,a.doctorId?.name,a.doctorId?.email,a.problem,a.status,a.consultationType,String(a._id),shortCode(a._id)])})).filter(x=>x.s>0);sc.sort((x,y)=>y.s-x.s);appts=sc.slice(0,150).map(x=>x.a);}
   const live=await CallSession.find({status:"active",lastHeartbeatAt:{$gte:new Date(Date.now()-90000)}}).select("appointmentId").lean();
   const liveSet=new Set(live.map(x=>String(x.appointmentId)));
   res.json({appointments:appts.map(a=>({...a,liveCall:liveSet.has(String(a._id))}))});
@@ -383,6 +386,7 @@ router.get("/files/:id/download",auth,wrap(async(req,res)=>{
   if(!permitted && ["report_ai_pdf","report_final_pdf"].includes(file.category)){
     const report=await MedicalReport.findOne({$or:[{aiPdfFileId:file._id},{finalPdfFileId:file._id}]});
     permitted=!!report && (String(report.patientId)===String(req.user.id) || (req.user.role==="doctor" && String(report.doctorId)===String(req.user.id)));
+    if(!permitted){const ma=await MultiAnalysis.findOne({aiPdfFileId:file._id});permitted=!!ma && (String(ma.patientId)===String(req.user.id) || (req.user.role==="doctor" && (!ma.doctorId || String(ma.doctorId)===String(req.user.id))));}
     if(permitted) accessAction="medical_report.pdf_access";
   }
   if(!permitted && file.category==="chat_attachment"){
@@ -556,10 +560,7 @@ router.post("/ai/report-file-analysis",auth,allow("patient"),reportFileUpload.si
   const userContent=req.file.mimetype==="application/pdf"
     ? `Analyze this extracted PDF report text. Treat OCR/text uncertainty explicitly.\n\n${extracted}`
     : [{type:"text",text:`Analyze this medical report image directly. OCR cross-check (may be inaccurate):\n${extracted||"No usable OCR text was extracted."}\nRead visible content carefully; do not guess unclear numbers.`},{type:"image_url",image_url:{url:`data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`}}];
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:userContent}],temperature:0.1})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed. Confirm that the configured OpenRouter model supports image input for image reports."});
-  const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
-  if(!answer) return res.status(502).json({error:"AI response was empty"});
+  const answer=await callAI([{role:"system",content:system},{role:"user",content:userContent}],{temperature:0.1,maxTokens:1800,vision:req.file.mimetype!=="application/pdf"});
   await audit(req,"ai.report_file_analyzed","User",req.user.id,{mimeType:req.file.mimetype,extractedCharacters:extracted.length,vision:req.file.mimetype!=="application/pdf"});
   res.json({answer,extractedText:extracted,analysisMode:req.file.mimetype==="application/pdf"?"pdf_text":"image_vision_plus_ocr",disclaimer:"AI explanation only—not a diagnosis or prescription. OCR/vision may misread values. Check every value against the original and ask a qualified clinician to review it. The uploaded report content was sent to the configured AI provider."});
 }));
@@ -569,8 +570,7 @@ router.post("/ai/report-analysis",auth,allow("patient"),aiLimiter,wrap(async(req
   const reportText=String(req.body.reportText||"").trim();
   if(reportText.length<20||reportText.length>12000) return res.status(400).json({error:"Paste report text between 20 and 12000 characters"});
   const system="You are a cautious medical-report explanation assistant. Explain only what the pasted report text says in plain language. Separate stated results from general context; do not diagnose, prescribe, change medication, or infer values missing from the text. Flag that units, reference ranges, age/sex context and lab methods matter. If a value appears potentially urgent, advise prompt contact with a qualified clinician without asserting a diagnosis. End by recommending review with the ordering clinician. Treat the text as potentially sensitive and do not repeat names or identifiers.";
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:reportText}],temperature:0.1})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed"}); const data=await response.json(); const answer=data.choices?.[0]?.message?.content; if(!answer) return res.status(502).json({error:"AI response was empty"});
+  const answer=await callAI([{role:"system",content:system},{role:"user",content:reportText}],{temperature:0.1,maxTokens:1500});
   await audit(req,"ai.report_text_analyzed","User",req.user.id,{characters:reportText.length}); res.json({answer,disclaimer:"AI explanation only—not a diagnosis. This feature does not read the uploaded PDF/image automatically; paste text carefully and have the ordering clinician review it."});
 }));
 
@@ -691,8 +691,7 @@ router.post("/appointments/:id/recording-analysis",auth,aiLimiter,wrap(async(req
   if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
   const transcript=String(req.body.transcript||"").trim(); if(transcript.length<20||transcript.length>12000) return res.status(400).json({error:"Provide a transcript between 20 and 12000 characters. Browser speech recognition or manual transcript can be used."});
   const system="You are a clinical documentation assistant, not a diagnosing or prescribing system. Summarize the supplied clinician-patient conversation into: 1) patient-reported symptoms and timeline, 2) relevant history/allergies/medicines explicitly mentioned, 3) clinician advice or plan explicitly stated, 4) follow-up questions or missing information, 5) urgent red flags mentioned. Distinguish patient statements from clinician statements. Never invent findings, diagnosis, or treatment. Mark uncertainty and say a licensed clinician must review. Do not make medication recommendations.";
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},{role:"user",content:transcript}],temperature:0.1})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed"}); const data=await response.json(); const summary=data.choices?.[0]?.message?.content; if(!summary) return res.status(502).json({error:"AI response was empty"});
+  const summary=await callAI([{role:"system",content:system},{role:"user",content:transcript}],{temperature:0.1,maxTokens:1500});
   await audit(req,"call.transcript_analyzed","Appointment",r.appt.id,{transcriptLength:transcript.length}); res.json({summary,disclaimer:"AI-generated draft for clinician review only. It is not a diagnosis, prescription, or verified medical record. Avoid sharing identifying details."});
 }));
 
@@ -743,7 +742,14 @@ router.get("/medicines",auth,allow("patient","doctor","admin"),wrap(async(req,re
   if(q.length<2) return res.json({medicines:[],message:"Enter at least two letters"});
   if(q.length>60) return res.status(400).json({error:"Search text is too long"});
   const rx=new RegExp(escapeRegex(q),"i");
-  const medicines=await Medicine.find({active:true,reviewStatus:"verified",$or:[{brand:rx},{generic:rx}]}).limit(20).select("brand generic strength form manufacturer country verifiedAt uses benefits sideEffects precautions interactions whenToTake");
+  const sel="brand generic strength form manufacturer country verifiedAt uses benefits sideEffects precautions interactions whenToTake";
+  let medicines=await Medicine.find({active:true,reviewStatus:"verified",$or:[{brand:rx},{generic:rx}]}).limit(20).select(sel);
+  if(medicines.length<5){ // few exact hits: add spelling-tolerant matches
+    const all=await Medicine.find({active:true,reviewStatus:"verified"}).select(sel).limit(6000);
+    const have=new Set(medicines.map(m=>String(m._id)));
+    const extra=all.filter(m=>!have.has(String(m._id))).map(m=>({m,s:fuzzyScore(q,[m.brand,m.generic])})).filter(x=>x.s>0).sort((a,b)=>b.s-a.s).slice(0,20-medicines.length).map(x=>x.m);
+    medicines=[...medicines,...extra];
+  }
   res.json({medicines,notice:"Catalogue may be incomplete. Verify medicine information with a qualified pharmacist or clinician."});
 }));
 
@@ -759,16 +765,13 @@ router.post("/ai/health-information",auth,aiLimiter,wrap(async(req,res)=>{
   if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
   const history=(Array.isArray(req.body.history)?req.body.history:[]).slice(-8).filter(m=>m&&["user","assistant"].includes(m.role)).map(m=>({role:m.role,content:String(m.content||"").slice(0,2000)}));
   const system="You are MedAI, the friendly health assistant of MedAI Hospital in Bangladesh. Reply in the same language the user writes in (Bangla, English or Banglish written in English letters, answer in Bangla or English). Be warm, clear and short (under 180 words unless asked for more); use simple words and short bullet points when helpful. Give general educational information only: do not diagnose, do not give medicine doses, do not tell the person to start, stop or change a prescription. If the user asks about a medicine, explain what it is generally used for, common cautions and when to ask a pharmacist or doctor; remind them that allergies, pregnancy, age and other medicines matter and a doctor must decide. For possible emergencies tell them to call 999. When useful, suggest booking an appointment in MedAI or uploading a lab report here with the + button. Never ask for names, phone numbers or other identifying details.";
-  const response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{"Authorization":`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages:[{role:"system",content:system},...history,{role:"user",content:question}],temperature:0.3,max_tokens:700})});
-  if(!response.ok) return res.status(502).json({error:"AI provider request failed. Please try again."});
-  const data=await response.json(); let answer=data.choices?.[0]?.message?.content;
-  if(!answer) return res.status(502).json({error:"AI response was empty"});
+  let answer=await callAI([{role:"system",content:system},...history,{role:"user",content:question}],{temperature:0.3,maxTokens:700});
   if(safety.level==="urgent") answer=`⚠️ ${safety.action}\n\n${answer}`;
   res.json({level:safety.level,flags:safety.flags,answer,disclaimer:"Informational only. Not a diagnosis or prescription."});
 }));
 
 // Saved AI chats (per user, so old chats can be reopened like ChatGPT/Gemini).
-const cleanMsgs=a=>(Array.isArray(a)?a:[]).slice(-200).map(m=>({role:m?.role==="user"?"user":"assistant",content:String(m?.content||"").slice(0,8000),level:m?.level?String(m.level).slice(0,20):undefined,file:m?.file?String(m.file).slice(0,200):undefined,error:m?.error?true:undefined,report:m?.report&&(m.report.id||m.report._id)?{id:String(m.report.id||m.report._id),_id:String(m.report.id||m.report._id)}:undefined}));
+const cleanMsgs=a=>(Array.isArray(a)?a:[]).slice(-200).map(m=>({role:m?.role==="user"?"user":"assistant",content:String(m?.content||"").slice(0,8000),level:m?.level?String(m.level).slice(0,20):undefined,file:m?.file?String(m.file).slice(0,200):undefined,error:m?.error?true:undefined,combined:m?.combined?.pdfId&&mongoose.isValidObjectId(m.combined.pdfId)?{pdfId:String(m.combined.pdfId)}:undefined,report:m?.report&&(m.report.id||m.report._id)?{id:String(m.report.id||m.report._id),_id:String(m.report.id||m.report._id)}:undefined}));
 router.get("/ai/chats",auth,wrap(async(req,res)=>{const chats=await ChatSession.find({userId:req.user.id}).select("title updatedAt").sort({updatedAt:-1}).limit(60);res.json({chats});}));
 router.get("/ai/chats/:id",auth,wrap(async(req,res)=>{if(!mongoose.isValidObjectId(req.params.id))return res.status(404).json({error:"Chat not found"});const chat=await ChatSession.findOne({_id:req.params.id,userId:req.user.id});if(!chat)return res.status(404).json({error:"Chat not found"});res.json({chat});}));
 router.post("/ai/chats",auth,wrap(async(req,res)=>{const messages=cleanMsgs(req.body.messages);const first=messages.find(m=>m.role==="user");const title=String(req.body.title||first?.content||"New chat").replace(/\s+/g," ").trim().slice(0,60)||"New chat";const chat=await ChatSession.create({userId:req.user.id,title,messages});res.json({chat:{_id:chat.id,title:chat.title,updatedAt:chat.updatedAt}});}));
@@ -1030,7 +1033,15 @@ router.get("/admin/medicines/review",auth,allow("admin"),wrap(async(req,res)=>{
   const page=Math.max(1,Number(req.query.page)||1), limit=50;
   const q=String(req.query.q||"").trim().slice(0,60);
   const st=String(req.query.status||"needs_review");const filter=st==="all"?{}:{reviewStatus:["needs_review","verified","rejected"].includes(st)?st:"needs_review"};
-  if(q){const rx=new RegExp(escapeRegex(q),"i"); filter.$or=[{brand:rx},{generic:rx}];}
+  if(q){
+    const rx=new RegExp(escapeRegex(q),"i"); const exact={...filter,$or:[{brand:rx},{generic:rx}]};
+    const n=await Medicine.countDocuments(exact);
+    if(n>0){const [records,total]=await Promise.all([Medicine.find(exact).sort({brand:1}).skip((page-1)*limit).limit(limit),Promise.resolve(n)]);return res.json({records,total,page,pages:Math.max(1,Math.ceil(total/limit))});}
+    // nothing matched exactly: typo-tolerant ranking over the catalogue
+    const all=await Medicine.find(filter).select("brand generic strength form manufacturer reviewStatus active").limit(6000).lean();
+    const ranked=all.map(m=>({m,s:fuzzyScore(q,[m.brand,m.generic])})).filter(x=>x.s>0).sort((a,b)=>b.s-a.s).map(x=>x.m);
+    return res.json({records:ranked.slice((page-1)*limit,page*limit),total:ranked.length,page,pages:Math.max(1,Math.ceil(ranked.length/limit)),fuzzy:true});
+  }
   const [records,total]=await Promise.all([Medicine.find(filter).sort({brand:1}).skip((page-1)*limit).limit(limit),Medicine.countDocuments(filter)]);
   res.json({records,total,page,pages:Math.max(1,Math.ceil(total/limit))});
 }));
@@ -1078,30 +1089,9 @@ router.post("/appointments/:id/claim",auth,allow("doctor"),wrap(async(req,res)=>
 }));
 
 
-function normalizeSearchText(value){return String(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9@.+_-]+/g," ").trim();}
-function editDistance(a,b){
-  if(Math.abs(a.length-b.length)>2)return 99;
-  let prev=Array.from({length:b.length+1},(_,i)=>i);
-  for(let i=1;i<=a.length;i++){const cur=[i];let rowMin=i;
-    for(let j=1;j<=b.length;j++){const v=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));cur[j]=v;rowMin=Math.min(rowMin,v);}
-    if(rowMin>2)return 99;prev=cur;
-  } return prev[b.length];
-}
-function fuzzyUserScore(user,q){
-  const query=normalizeSearchText(q);if(!query)return 1;
-  const fields=[user.name,user.email,user.phone,user.doctorProfile?.specialty,user.doctorProfile?.bmdcNumber].map(normalizeSearchText).filter(Boolean);
-  let best=0;
-  for(const field of fields){
-    if(field.includes(query))best=Math.max(best,100-query.length+Math.min(field.length,20));
-    const words=field.split(/\s+/);
-    for(const token of words){
-      if(token.startsWith(query))best=Math.max(best,85);
-      const d=editDistance(token,query);
-      if(d<=Math.max(1,Math.floor(query.length/4)))best=Math.max(best,70-d*10);
-    }
-  }
-  return best;
-}
+function normalizeSearchText(value){return String(value||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^\p{L}\p{N}@.+_-]+/gu," ").trim();}
+function fuzzyUserScore(user,q){return fuzzyScore(q,[user.name,user.email,user.phone,user.doctorProfile?.specialty,user.doctorProfile?.bmdcNumber]);}
+const shortCode=id=>String(id||"").slice(-8).toUpperCase();
 router.get("/admin/users",auth,allow("admin"),wrap(async(req,res)=>{
   const role=["patient","doctor"].includes(String(req.query.role))?String(req.query.role):"doctor";
   const q=String(req.query.q||"").trim().slice(0,100);
@@ -1123,7 +1113,7 @@ router.get("/admin/users",auth,allow("admin"),wrap(async(req,res)=>{
       let candidates=await User.find({...baseFilter,_id:{$nin:excluded},...candidateFilter}).select(projection).sort({createdAt:-1}).limit(1200).lean();
       // Small fallback protects searches where the first typed character itself is wrong.
       if(candidates.length<80){const found=new Set([...seen,...candidates.map(u=>String(u._id))]);const fallback=await User.find({...baseFilter,_id:{$nin:[...found].map(id=>new mongoose.Types.ObjectId(id))}}).select(projection).sort({createdAt:-1}).limit(300).lean();candidates.push(...fallback);}
-      const fuzzy=candidates.map(u=>({u,score:fuzzyUserScore(u,q)})).filter(x=>x.score>=60).sort((a,b)=>b.score-a.score||new Date(b.u.createdAt)-new Date(a.u.createdAt)).slice(0,200-exact.length).map(x=>x.u);
+      const fuzzy=candidates.map(u=>({u,score:fuzzyUserScore(u,q)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||new Date(b.u.createdAt)-new Date(a.u.createdAt)).slice(0,200-exact.length).map(x=>x.u);
       users=[...exact,...fuzzy];
     }
   }
@@ -1230,23 +1220,7 @@ function reportSections(st={},docType="lab",nextText=""){
   rest.push({heading:"Medical information sources",text:"MedlinePlus (NIH) | NHS | WHO | FDA Drug Information | DailyMed | DGDA Bangladesh | MedEx Bangladesh"});
   return {lead,rest};
 }
-async function callOpenRouter(messages,temperature=0.1){
-  let response;
-  try{
-    response=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",headers:{Authorization:`Bearer ${config.openRouterKey}`,"Content-Type":"application/json","HTTP-Referer":config.clientOrigin,"X-Title":"MedAI Hospital"},body:JSON.stringify({model:config.openRouterModel,messages,temperature}),signal:AbortSignal.timeout(55000)});
-  }catch(e){
-    const timed=/timeout|aborted|AbortError/i.test(String(e?.name||e?.message||e));
-    throw Object.assign(new Error(timed?"AI timed out while reading the report. Try a smaller, clearer photo of the result table.":"Could not reach the AI provider. Try again in a minute."),{status:504});
-  }
-  if(!response.ok){
-    let detail=""; try{const j=await response.json();detail=j?.error?.message||j?.message||"";}catch{}
-    const msg=response.status===401||response.status===403?"AI provider key is invalid or missing on the server.":response.status===429?"AI is busy right now. Please try again in a minute.":(detail?("AI error: "+String(detail).slice(0,180)):"AI provider request failed");
-    throw Object.assign(new Error(msg),{status:502});
-  }
-  const data=await response.json(); const answer=data.choices?.[0]?.message?.content;
-  if(!answer) throw Object.assign(new Error("AI response was empty"),{status:502});
-  return String(answer);
-}
+async function callOpenRouter(messages,temperature=0.1,maxTokens=2200){ return callAI(messages,{temperature,maxTokens}); }
 const SCHEMA_HINT='Return ONLY valid JSON: {"report_type":"","report_date":"","facility":"","summary":"2-4 plain sentences","stands_out":["short points"],"bangla_summary":"1-3 sentences in Bangla","tests_to_do":[{"name":"","why":""}],"when_to_see_doctor":"","questions_to_ask":[""],"general_tips":[""],"medicines":[{"name":"","dose":"","frequency":"","duration":"","purpose":""}]}. Leave unknown fields empty. "medicines" is only for a prescription and must copy what is printed.';
 async function requestStructuredAI({docType,extracted,verified,imageDataUrl}){
   const rules={
@@ -1258,7 +1232,7 @@ async function requestStructuredAI({docType,extracted,verified,imageDataUrl}){
   const payload=JSON.stringify({documentType:docType,extractedText:String(extracted||"").slice(0,12000),verifiedFindings:verified||[]});
   const content=imageDataUrl?[{type:"text",text:payload},{type:"image_url",image_url:{url:imageDataUrl}}]:payload;
   const raw=await callOpenRouter([{role:"system",content:system},{role:"user",content}],0.1);
-  let st={};try{st=JSON.parse((raw.match(/\{[\s\S]*\}/)||["{}"])[0]);}catch{st={summary:raw.slice(0,1500)};}
+  let st=parseJsonLoose(raw)||{summary:raw.slice(0,1500)};
   if(!st||typeof st!=="object") st={summary:raw.slice(0,1500)};
   if(!st.summary) st.summary="The AI could not read enough of this file. Please compare with your original and ask your doctor.";
   return st;
@@ -1281,10 +1255,8 @@ function flowSteps(status,doctorName){
     {label:"Sent to doctor",sub:doctorName?`Dr. ${doctorName}`:"Waiting for assignment",state:doctorName?"done":"current"},
     {label:"Doctor approval",sub:approved?"Approved":rejected?"Not approved":status==="changes_requested"?"Changes requested":status==="under_review"?"In review":"Waiting",state:approved?"done":rejected?"bad":doctorName?"current":"todo"}];
 }
-router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(async(req,res)=>{
-  const file=await PrivateFile.findOne({_id:req.params.fileId,ownerId:req.user.id,category:"patient_report"}); if(!file) return res.status(404).json({error:"Patient report file not found"});
-  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
-  const doctorId=await pickReportDoctor(req.user.id,req.body?.doctorId);
+async function analyzeReportFile(req,file,preferredDoctorId){
+  const doctorId=await pickReportDoctor(req.user.id,preferredDoctorId);
   const report=await MedicalReport.create({patientId:req.user.id,doctorId:doctorId||null,originalFileId:file._id,status:"ai_processing"});
   try{
     const isPdf=file.mimeType==="application/pdf";
@@ -1307,7 +1279,7 @@ router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(asyn
       const content=isPdf?extractionPrompt:[{type:"text",text:extractionPrompt},{type:"image_url",image_url:{url:imageDataUrl}}];
       let candidates=[];
       const extraction=await callOpenRouter([{role:"system",content:"You extract medical laboratory values from supplied text or report images. Copy every numeric value exactly. Do not interpret, diagnose, normalize, or silently fix OCR. Never guess unclear values. Return valid JSON only with findings array containing name, value, unit, normal_range."},{role:"user",content}],0);
-      try{candidates=JSON.parse((extraction.match(/\{[\s\S]*\}/)||["{}"])[0]).findings||[];}catch{candidates=[];}
+      candidates=parseJsonLoose(extraction)?.findings||[];
       verified=verifyFindings(candidates,{age:ageFromDob(profile?.dateOfBirth),sex:normSex(profile?.gender)});
       urgencyLevel=urgency(verified.findings);
     }
@@ -1328,15 +1300,18 @@ router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(asyn
     if(report.doctorId) await notify(report.doctorId,"report_review_requested","Report awaiting review",`${req.user.name} sent an AI-analysed ${DOC_LABEL[docType].toLowerCase()} that needs your review and approval.`,"MedicalReport",report.id);
     else {const admins=await User.find({role:"admin",status:"active"}).select("_id");for(const a of admins)await notify(a.id,"report_unassigned","Report needs a doctor",`${req.user.name} uploaded a report but no active doctor is available. Open Reports to assign one.`,"MedicalReport",report.id);}
     await audit(req,"medical_report.ai_completed","MedicalReport",report.id,{docType,findings:verified.stats.total,verified:verified.stats.verified,unchecked:verified.stats.unchecked,doctorAssigned:!!report.doctorId});
-    res.status(201).json({report:{id:report.id,originalFileId:String(file._id),status:report.status,docType,urgencyLevel:report.urgencyLevel,findings:report.findings,aiExplanation:report.aiExplanation,aiStructured:structured,aiPdfFileId:report.aiPdfFileId,doctorAssigned:!!report.doctorId,doctorName:doctor?.name||null,nextText},disclaimer:"AI-generated and not doctor-approved. Always compare with your original report."});
+    return ({report:{id:report.id,originalFileId:String(file._id),status:report.status,docType,urgencyLevel:report.urgencyLevel,findings:report.findings,aiExplanation:report.aiExplanation,aiStructured:structured,aiPdfFileId:report.aiPdfFileId,doctorAssigned:!!report.doctorId,doctorName:doctor?.name||null,nextText},disclaimer:"AI-generated and not doctor-approved. Always compare with your original report."});
   }catch(e){
     report.status="uploaded";
     await report.save().catch(()=>{});
-    const status=e.status||e.statusCode||500;
-    const msg=e.message||"Could not analyse this report";
-    if(status>=400&&status<600) return res.status(status).json({error:msg});
+    e.status=e.status||e.statusCode||500; e.expose=true; if(!e.message) e.message="Could not analyse this report";
     throw e;
   }
+}
+router.post("/reports/:fileId/analyze",auth,allow("patient"),aiLimiter,wrap(async(req,res)=>{
+  const file=await PrivateFile.findOne({_id:req.params.fileId,ownerId:req.user.id,category:"patient_report"}); if(!file) return res.status(404).json({error:"Patient report file not found"});
+  if(!config.openRouterKey) return res.status(503).json({error:"AI provider is not configured"});
+  res.status(201).json(await analyzeReportFile(req,file,req.body?.doctorId));
 }));
 router.get("/reports/mine",auth,wrap(async(req,res)=>{
   const filter=req.user.role==="patient"?{patientId:req.user.id}:req.user.role==="doctor"?{doctorId:req.user.id}:{};
@@ -1571,9 +1546,12 @@ router.get("/admin/reports",auth,allow("admin"),wrap(async(req,res)=>{
   if(req.query.review==="pending") filter.status={$in:REVIEW_PENDING};
   if(req.query.review==="approved") filter.status={$in:REVIEW_APPROVED};
   if(req.query.review==="rejected") filter.status="rejected";
-  let reports=await MedicalReport.find(filter).populate("patientId","name email phone").populate("doctorId","name doctorProfile.specialty").populate("originalFileId","originalName mimeType size").select("-extractedText -aiExplanation").sort({createdAt:-1}).limit(300);
-  if(q) reports=reports.filter(r=>`${r.patientId?.name||""} ${r.patientId?.email||""}`.toLowerCase().includes(q));
-  const rows=reports.map(r=>({_id:r._id,createdAt:r.createdAt,status:r.status,reviewState:REVIEW_APPROVED.includes(r.status)?"approved":r.status==="rejected"?"rejected":REVIEW_PENDING.includes(r.status)?"pending":"not_submitted",analysisState:r.aiPdfFileId?"completed":r.status==="ai_processing"?"processing":"not_analyzed",urgencyLevel:r.urgencyLevel,reviewComment:r.reviewComment,rejectionReason:r.rejectionReason,patient:r.patientId?{_id:r.patientId._id,name:r.patientId.name,email:r.patientId.email,phone:r.patientId.phone}:null,doctor:r.doctorId?{_id:r.doctorId._id,name:r.doctorId.name,specialty:r.doctorId.doctorProfile?.specialty}:null,files:{original:r.originalFileId?{id:r.originalFileId._id,name:r.originalFileId.originalName}:null,aiPdf:r.aiPdfFileId||null,finalPdf:r.finalPdfFileId||null}}));
+  let reports=await MedicalReport.find(filter).populate("patientId","name email phone").populate("doctorId","name doctorProfile.specialty").populate("originalFileId","originalName mimeType size").select("-extractedText -aiExplanation").sort({createdAt:-1}).limit(q?800:300);
+  if(q){
+    const scored=reports.map(r=>({r,sc:fuzzyScore(q,[r.patientId?.name,r.patientId?.email,r.patientId?.phone,r.doctorId?.name,r.doctorId?.doctorProfile?.specialty,r.originalFileId?.originalName,r.docType,r.status,r.urgencyLevel,String(r._id),shortCode(r._id),r.aiStructured?.report_type,r.aiStructured?.facility,...(r.findings||[]).map(f=>f.name)])})).filter(x=>x.sc>0);
+    scored.sort((a,b)=>b.sc-a.sc||new Date(b.r.createdAt)-new Date(a.r.createdAt)); reports=scored.slice(0,300).map(x=>x.r);
+  }
+  const rows=reports.map(r=>({_id:r._id,code:shortCode(r._id),createdAt:r.createdAt,status:r.status,reviewState:REVIEW_APPROVED.includes(r.status)?"approved":r.status==="rejected"?"rejected":REVIEW_PENDING.includes(r.status)?"pending":"not_submitted",analysisState:r.aiPdfFileId?"completed":r.status==="ai_processing"?"processing":"not_analyzed",urgencyLevel:r.urgencyLevel,reviewComment:r.reviewComment,rejectionReason:r.rejectionReason,patient:r.patientId?{_id:r.patientId._id,name:r.patientId.name,email:r.patientId.email,phone:r.patientId.phone}:null,doctor:r.doctorId?{_id:r.doctorId._id,name:r.doctorId.name,specialty:r.doctorId.doctorProfile?.specialty}:null,files:{original:r.originalFileId?{id:r.originalFileId._id,name:r.originalFileId.originalName}:null,aiPdf:r.aiPdfFileId||null,finalPdf:r.finalPdfFileId||null}}));
   const doctors=await User.find({role:"doctor",status:"active"}).select("name doctorProfile.specialty").sort({name:1});
   res.json({reports:rows,doctors:doctors.map(d=>({_id:d._id,name:d.name,specialty:d.doctorProfile?.specialty||""}))});
 }));
@@ -1666,6 +1644,38 @@ router.get("/admin/recent-signups",auth,allow("admin"),wrap(async(_req,res)=>{
   const users=found.map(u=>{const o=u.toObject();o.requestedPassword=u.status==="pending_approval"?true:undefined;delete o.pendingPassword;return o;});res.json({users});
 }));
 
-installV38(router,{notify,ACCESS:DOCTOR_ACCESS_STATUSES,PRESCRIBE:PRESCRIBE_STATUSES,sendMailSafe});
+const v38=installV38(router,{notify,ACCESS:DOCTOR_ACCESS_STATUSES,PRESCRIBE:PRESCRIBE_STATUSES,sendMailSafe});
+
+// Combine: earlier analysed reports (ticked) + reports just uploaded -> ONE combined AI analysis + ONE PDF, sent to the doctor.
+router.post("/reports/combine",auth,allow("patient"),aiLimiter,wrap(async(req,res)=>{
+  const ids=[...new Set((Array.isArray(req.body.reportIds)?req.body.reportIds:[]).map(String))].filter(id=>mongoose.isValidObjectId(id)).slice(0,10);
+  if(ids.length<2) return res.status(400).json({error:"Choose at least 2 analysed reports (old and/or new) to combine"});
+  const doctorId=await pickReportDoctor(req.user.id,req.body.doctorId);
+  const a=await v38.runMultiAnalysis(req,{ids,lang:req.body.lang,doctorId});
+  try{
+    const reports=(await MedicalReport.find({_id:{$in:a.reportIds},patientId:req.user.id})).sort((x,y)=>new Date(x.createdAt)-new Date(y.createdAt));
+    const fmt=d=>new Date(d).toLocaleDateString("en-GB",{timeZone:"Asia/Dhaka"});
+    const findings=[];
+    for(const r of reports) for(const f of (r.findings||[])){const o=f.toObject?f.toObject():{...f}; o.name=`${o.name||"Test"} (${fmt(r.createdAt)})`; findings.push(o);}
+    const ai=a.ai||{};
+    const bullets=arr=>(arr||[]).map(x=>"- "+x).join("\n");
+    const lead=[{heading:"Summary",text:String(ai.summary||"").slice(0,1500)}];
+    if((ai.patterns||[]).length) lead.push({heading:"Patterns across your reports",text:bullets(ai.patterns)});
+    if((ai.possibleConditions||[]).length) lead.push({heading:"Possible conditions to discuss with a doctor (not a diagnosis)",text:ai.possibleConditions.map(c=>`- ${c.name} (${c.likelihood})${c.note?": "+c.note:""}`).join("\n")});
+    const rest=[{heading:"Reports included",text:reports.map(r=>`- ${fmt(r.createdAt)} - ${DOC_LABEL[r.docType]||"Report"}${r.status==="signed"||r.status==="approved"?" (doctor-approved earlier)":""}`).join("\n")}];
+    if((ai.suggestedTests||[]).length) rest.push({heading:"Tests to discuss",text:ai.suggestedTests.map(t=>`- ${t.name}${t.reason?" - "+t.reason:""}`).join("\n")});
+    if(ai.suggestedSpecialty) rest.push({heading:"Suggested specialist",text:ai.suggestedSpecialty});
+    if((ai.redFlags||[]).length) rest.push({heading:"Warning signs",text:bullets(ai.redFlags)});
+    rest.push({heading:"Medicines",text:"No medicine suggested. A doctor must examine first."});
+    const doctor=doctorId?await User.findById(doctorId).select("name"):null;
+    const pdf=await makeReportPdf({heading:"Combined Report Analysis",subtitle:`${reports.length} reports reviewed together`,banner:"AI DRAFT - WAITING FOR DOCTOR APPROVAL",
+      meta:[["Patient",req.user.name],["Reports",String(reports.length)],["Doctor",doctor?"Dr. "+doctor.name:"Waiting for assignment"],["Created",new Date().toLocaleString("en-GB",{timeZone:"Asia/Dhaka"})+" (Bangladesh time)"]],
+      urgency:ai.urgency||"routine",findings,stats:{total:findings.length,verified:findings.length,unchecked:0},showCounts:findings.length>0,leadSections:lead,sections:rest,
+      disclaimer:"AI information only. Not a diagnosis. A registered doctor decides your tests and medicines. Emergency: call 999. The AI can misread a file, so always compare with your originals."});
+    const pdfFile=await storeBuffer({ownerId:req.user.id,uploadedBy:req.user.id,category:"report_ai_pdf",originalName:"AI-combined-report-analysis.pdf",mimeType:"application/pdf",buffer:pdf});
+    a.aiPdfFileId=pdfFile._id; await a.save();
+  }catch(e){ console.error("Combined PDF failed:",e.message); }
+  res.status(201).json({analysis:a,doctorAssigned:!!a.doctorId});
+}));
 
 export default router;

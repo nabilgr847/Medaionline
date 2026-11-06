@@ -33,6 +33,7 @@ app.use((err,req,res,_next)=>{
   console.error("API error:",{requestId,name:err.name,message:err.message,method:req.method,path:req.path});
   SystemError.create({requestId,severity:(err.status>=500||!err.status)?"error":"warning",errorName:String(err.name||"Error").slice(0,120),message:sanitizeErrorMessage(err.message),statusCode:Number.isInteger(err.status)?err.status:500,method:req.method,route:req.route?.path||req.path,actorId:req.user?.id||null}).catch(logErr=>console.error("Could not persist system error:",logErr.message));
   if(err.name==="MulterError" || String(err.message||"").startsWith("Supported files:") || String(err.message||"").startsWith("Upload a PDF,")) return res.status(400).json({error:err.message});
+  if(err.expose) return res.status(Number.isInteger(err.status)?err.status:502).json({error:err.message});
   if(err.name==="CastError") return res.status(400).json({error:"Invalid identifier"});
   if(err.code==="STORED_FILE_MISSING" || err.status===410) return res.status(410).json({error:err.message});
   if(Number.isInteger(err.status)&&err.status>=400&&err.status<500) return res.status(err.status).json({error:err.message||"Request failed"});

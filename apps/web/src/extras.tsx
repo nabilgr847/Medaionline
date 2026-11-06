@@ -118,11 +118,11 @@ export function AlertCenter({ api }: { api: Api }) {
 
 // ---- Admin: read/send messages, observe or join calls ----
 export function AdminConversations({ api, user, setMessage }: { api: Api; user: any; setMessage: (s: string) => void }) {
-  const [list, setList] = useState<any[]>([]); const [sel, setSel] = useState<any>(null); const [callOn, setCallOn] = useState(false);
-  async function load() { try { const d = await api("/admin/appointments"); setList(d.appointments || []); } catch (e: any) { setMessage(e.message); } }
-  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
+  const [list, setList] = useState<any[]>([]); const [sel, setSel] = useState<any>(null); const [callOn, setCallOn] = useState(false); const [q, setQ] = useState("");
+  async function load() { try { const d = await api("/admin/appointments" + (q.trim() ? "?q=" + encodeURIComponent(q.trim()) : "")); setList(d.appointments || []); } catch (e: any) { setMessage(e.message); } }
+  useEffect(() => { const t0 = setTimeout(load, 300); const t = setInterval(load, 10000); return () => { clearTimeout(t0); clearInterval(t); }; }, [q]);
   return <div className="grid">
-    <article><h3>Conversations</h3><button className="outline" onClick={load}>↻ Refresh</button>
+    <article><h3>Conversations</h3><div className="row"><input placeholder="Search name, problem, status or code (spelling mistakes are OK)" value={q} onChange={(e) => setQ(e.target.value)} /><button className="outline" onClick={load}>↻</button></div>
       {list.length === 0 && <p className="muted">No assigned appointments yet.</p>}
       <div className="convlist">{list.map((a) => <button type="button" key={a._id} className={"item convitem" + (sel?._id === a._id ? " on" : "")} onClick={() => { setSel(a); setCallOn(false); }}>
         <b>{a.patientId?.name || "Patient"} ⇄ Dr. {a.doctorId?.name || "?"}</b>{a.liveCall && <span className="livepill">● LIVE CALL</span>}

@@ -3,10 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API, json, postForm, downloadFile } from "./api";
 import type { Api } from "./api";
 
-type Msg = { role: "user" | "assistant"; content: string; level?: string; report?: any; file?: string; error?: boolean; preview?: string };
+type Msg = { role: "user" | "assistant"; content: string; level?: string; report?: any; file?: string; error?: boolean; preview?: string; combined?: any };
 
 /** Shrink phone photos so AI analysis finishes before server timeout. */
-async function compressImage(file: File, maxSide = 1600, quality = 0.72): Promise<File> {
+export async function compressImage(file: File, maxSide = 1600, quality = 0.72): Promise<File> {
   if (!file.type.startsWith("image/") || file.type === "image/gif") return file;
   if (file.size < 450_000) return file;
   try {
@@ -133,7 +133,7 @@ export function ReportView({ api, token, report, previewUrl, onError }: { api: A
 }
 
 export default function ChatAI({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
-  const [msgs, setMsgs] = useState<Msg[]>([]); const [text, setText] = useState(""); const [busy, setBusy] = useState(false); const [file, setFile] = useState<File | null>(null); const [listening, setListening] = useState(false);
+  const [msgs, setMsgs] = useState<Msg[]>([]); const [text, setText] = useState(""); const [busy, setBusy] = useState(false); const [files, setFiles] = useState<File[]>([]); const MAX_FILES = 8; const [listening, setListening] = useState(false);
   const [chatId, setChatId] = useState(""); const [chats, setChats] = useState<{ _id: string; title: string; updatedAt: string }[]>([]); const [hist, setHist] = useState(false); const skipSave = useRef(true);
   const loadChats = useCallback(async () => { try { const d = await api("/ai/chats"); setChats(d.chats || []); } catch { /* history is best-effort */ } }, [api]);
   useEffect(() => { loadChats(); }, []);
@@ -148,9 +148,9 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
     }, 400);
     return () => clearTimeout(t);
   }, [msgs, busy]);
-  function newChat() { skipSave.current = true; setChatId(""); setMsgs([]); setFile(null); setText(""); setHist(false); }
+  function newChat() { skipSave.current = true; setChatId(""); setMsgs([]); setFiles([]); setText(""); setHist(false); }
   async function openChat(id: string) {
-    try { const d = await api(`/ai/chats/${id}`); skipSave.current = true; setChatId(id); setMsgs(d.chat.messages || []); setFile(null); setHist(false); } catch (e: any) { setMessage(e.message); }
+    try { const d = await api(`/ai/chats/${id}`); skipSave.current = true; setChatId(id); setMsgs(d.chat.messages || []); setFiles([]); setHist(false); } catch (e: any) { setMessage(e.message); }
   }
   async function delChat(id: string) {
     if (!confirm("Delete this chat?")) return;
@@ -162,28 +162,47 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
   useEffect(() => { const t = taRef.current; if (t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 140) + "px"; } }, [text]);
 
   async function send(preset?: string) {
-    const q = (preset ?? text).trim(); if (busy || (!q && !file)) return;
-    if (!file && preset === CHIPS[3]) { fileRef.current?.click(); return; }
-    const f = file; setText(""); setFile(null); setBusy(true); skipSave.current = false;
+    const q = (preset ?? text).trim(); if (busy || (!q && !files.length)) return;
+    if (!files.length && preset === CHIPS[3]) { fileRef.current?.click(); return; }
+    const fl = files; setText(""); setFiles([]); setBusy(true); skipSave.current = false;
     const history = msgs.filter((m) => !m.report && !m.error).slice(-8).map((m) => ({ role: m.role, content: m.content }));
-    setMsgs((m) => [...m, { role: "user", content: q || "Please analyse this report", file: f?.name }]);
+    setMsgs((m) => [...m, { role: "user", content: q || (fl.length > 1 ? `Please analyse these ${fl.length} reports` : "Please analyse this report"), file: fl.map((x) => x.name).join(", ") || undefined }]);
     try {
-      if (f) {
-        const ready = await compressImage(f);
-        const fd = new FormData(); fd.append("file", ready); fd.append("category", "patient_report");
-        const up = await postForm("/files/upload", fd, token);
-        const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) });
-        setMsgs((m) => [...m, { role: "assistant", content: "I read your report. Here is a simple summary:", report: an.report, preview: ready.type.startsWith("image/") ? URL.createObjectURL(ready) : "" }]);
-        if (q) { const d = await api("/ai/health-information", { method: "POST", body: json({ question: q + "\n\n(Context: the patient just uploaded a lab report; summary is shown above.)", history }) }); setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]); }
+      if (fl.length) {
+        const okIds: string[] = [];
+        for (let i = 0; i < fl.length; i++) {
+          const f = fl[i]; const tag = fl.length > 1 ? ` (${i + 1}/${fl.length})` : "";
+          try {
+            const ready = await compressImage(f);
+            const fd = new FormData(); fd.append("file", ready); fd.append("category", "patient_report");
+            const up = await postForm("/files/upload", fd, token);
+            const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) });
+            okIds.push(an.report.id);
+            setMsgs((m) => [...m, { role: "assistant", content: `I read ${f.name}${tag}. Here is a simple summary:`, report: an.report, preview: ready.type.startsWith("image/") ? URL.createObjectURL(ready) : "" }]);
+          } catch (e: any) {
+            setMsgs((m) => [...m, { role: "assistant", content: `Could not analyse ${f.name}${tag}: ${e.message || "unknown error"}. The other files continue.`, error: true }]);
+          }
+        }
+        if (okIds.length >= 2) {
+          try {
+            const c = await api("/reports/combine", { method: "POST", body: json({ reportIds: okIds }) });
+            const ai = c.analysis?.ai || {};
+            const lines = [ai.summary, ...(ai.patterns || []).map((x: string) => "- " + x)].filter(Boolean).join("\n");
+            setMsgs((m) => [...m, { role: "assistant", content: `**Combined summary of ${okIds.length} reports** (AI draft, sent to a doctor for review):\n\n${lines}`, combined: { pdfId: c.analysis?.aiPdfFileId } }]);
+          } catch (e: any) {
+            setMsgs((m) => [...m, { role: "assistant", content: "Each report was analysed, but the combined summary failed: " + (e.message || "unknown error"), error: true }]);
+          }
+        }
+        if (q && okIds.length) { const d = await api("/ai/health-information", { method: "POST", body: json({ question: q + "\n\n(Context: the patient just uploaded lab report(s); the summary is shown above.)", history }) }); setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]); }
       } else {
         const d = await api("/ai/health-information", { method: "POST", body: json({ question: q, history }) });
         setMsgs((m) => [...m, { role: "assistant", content: d.answer, level: d.level }]);
       }
     } catch (e: any) {
-      const tip = (e?.message || "").toLowerCase().includes("timeout") || (e?.message || "").toLowerCase().includes("timed out")
-        ? " Tip: take a closer, clearer photo of only the result table and try again."
-        : (e?.message || "").toLowerCase().includes("not configured")
-        ? " The hospital AI key may be missing on the server."
+      const low = String(e?.message || "").toLowerCase();
+      const tip = low.includes("timeout") || low.includes("timed out") ? " Tip: take a closer, clearer photo of only the result table and try again."
+        : low.includes("not configured") ? " The hospital AI key may be missing on the server."
+        : low.includes("busy") || low.includes("rate limit") ? " The free AI is busy; wait a minute and press send again."
         : " You can also open My reports and use Analyze there, or paste the values as text.";
       setMsgs((m) => [...m, { role: "assistant", content: (e.message || "Could not analyse this report.") + tip, error: true }]);
     }
@@ -204,22 +223,37 @@ export default function ChatAI({ api, token, setMessage }: { api: Api; token: st
     <div className="chathead"><button type="button" className="outline histtoggle" onClick={() => setHist(!hist)} aria-label="Chat history">☰</button><img src="/branding/favicon.svg" alt="" /><div><b>MedAI Assistant</b><small><i className="dot" /> Ask about health, medicines or upload a lab report</small></div>
       <button className="outline" onClick={newChat}>＋ New chat</button></div>
     <div className="chatlog2" aria-live="polite">
-      {msgs.length === 0 && <div className="chatempty"><img src="/branding/favicon.svg" alt="" /><h3>How can I help today?</h3><p>বাংলা বা English, যেকোনো ভাষায় লিখুন। I can explain symptoms, medicines and lab reports in simple words.</p>
-        <div className="chips">{CHIPS.map((c) => <button key={c} type="button" className="chip" onClick={() => send(c)}>{c}</button>)}</div></div>}
+      {msgs.length === 0 && <div className="chatempty">
+        <img src="/branding/favicon.svg" alt="" />
+        <h3>How can I help today?</h3>
+        <p>বাংলা বা English — symptoms, medicines, or lab reports in simple words.</p>
+        <div className="empty-actions">
+          <button type="button" className="primary" onClick={() => fileRef.current?.click()}>📄 Upload report</button>
+          <button type="button" className="outline" onClick={() => taRef.current?.focus()}>💬 Ask a question</button>
+        </div>
+        <div className="chips">{CHIPS.map((c) => <button key={c} type="button" className="chip" onClick={() => send(c)}>{c}</button>)}</div>
+      </div>}
       {msgs.map((m, i) => <div key={i} className={"cmsg " + m.role + (m.level === "emergency" ? " emergency" : "") + (m.error ? " err" : "")}>
         {m.role === "assistant" && <img className="av" src="/branding/favicon.svg" alt="" />}
-        <div className="cbub">{m.file && <div className="cfile">📎 {m.file}</div>}<Md text={m.content} />{m.report && <ReportView api={api} token={token} report={m.report} previewUrl={m.preview} onError={setMessage} />}</div></div>)}
-      {busy && <div className="cmsg assistant"><img className="av" src="/branding/favicon.svg" alt="" /><div className="cbub typing"><i /><i /><i /></div></div>}
+        <div className="cbub">
+          {m.file && <div className="cfile">📎 {m.file}</div>}
+          <Md text={m.content} />
+          {m.error && <button type="button" className="outline retry-btn" onClick={() => send()}>↻ Try again</button>}
+          {m.report && <ReportView api={api} token={token} report={m.report} previewUrl={m.preview} onError={setMessage} />}
+          {m.combined?.pdfId && <button className="primary" onClick={() => downloadFile(token, m.combined.pdfId, "MedAI-combined-report.pdf").catch((e) => setMessage(e.message))}>⬇️ Download combined PDF</button>}
+        </div>
+      </div>)}
+      {busy && <div className="cmsg assistant"><img className="av" src="/branding/favicon.svg" alt="" /><div className="cbub typing-wrap"><div className="typing"><i /><i /><i /></div><small className="progress-hint">Reading file → extracting values → writing explanation…</small></div></div>}
       <div ref={endRef} />
     </div>
     <p className="cnote">AI can make mistakes. For emergencies call 999. It does not replace a doctor.</p>
-    {file && <div className="attached">📎 {file.name} <button type="button" onClick={() => setFile(null)} aria-label="Remove file">✕</button></div>}
+    {files.length > 0 && <div className="attached" style={{ flexWrap: "wrap", gap: 6 }}>{files.map((f, i) => <span key={f.name + i}>📎 {f.name} <button type="button" onClick={() => setFiles((l) => l.filter((_, j) => j !== i))} aria-label={"Remove " + f.name}>✕</button></span>)}{files.length > 1 && <small>{files.length} files · one combined PDF will be made</small>}</div>}
     <div className="composer">
-      <input ref={fileRef} type="file" hidden accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = ""; }} />
-      <button type="button" className="cbtn" onClick={() => fileRef.current?.click()} aria-label="Attach lab report" title="Attach lab report (PDF/image)">＋</button>
-      <textarea ref={taRef} rows={1} value={text} placeholder={file ? "Add a question about this report (optional)…" : "Message MedAI…"} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+      <input ref={fileRef} type="file" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => { const picked = Array.from(e.target.files || []); setFiles((l) => [...l, ...picked].slice(0, MAX_FILES)); e.target.value = ""; }} />
+      <button type="button" className="cbtn" onClick={() => fileRef.current?.click()} aria-label="Attach reports" title="Attach one or more reports (PDF/image)">＋</button>
+      <textarea ref={taRef} rows={1} value={text} placeholder={files.length ? "Add a question about these reports (optional)…" : "Message MedAI…"} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
       {SR && <button type="button" className={"cbtn" + (listening ? " rec" : "")} onClick={mic} aria-label="Voice input" title="Voice input (Bangla)">🎤</button>}
-      <button type="button" className="cbtn send" onClick={() => send()} disabled={busy || (!text.trim() && !file)} aria-label="Send">↑</button>
+      <button type="button" className="cbtn send" onClick={() => send()} disabled={busy || (!text.trim() && !files.length)} aria-label="Send">↑</button>
     </div>
   </div>
   </div>;

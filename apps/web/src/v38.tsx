@@ -1,7 +1,8 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // V3.8: combined multi-report analysis (patient + doctor), admin System tab, admin recovery page.
 import { useEffect, useState } from "react";
-import { Api, json, fmtDay, fmtDate, label, makeApi } from "./api";
+import { Api, json, postForm, downloadFile, fmtDay, fmtDate, label, makeApi } from "./api";
+import { compressImage } from "./ChatAI";
 
 const URG: Record<string, string> = { routine: "🟢 Routine", soon: "🟠 See a doctor soon", urgent: "🔴 Urgent - see a doctor today" };
 const LIKE: Record<string, string> = { low: "Low", moderate: "Moderate", high: "High" };
@@ -35,7 +36,7 @@ function FinalView({ f }: { f: any }) {
 }
 
 /** Patient tab: pick 2+ analysed reports, get a combined analysis, see doctor-approved result. */
-export function PatientCombined({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+export function PatientCombined({ api, setMessage, token = "" }: { api: Api; setMessage: (s: string) => void; token?: string }) {
   const [reports, setReports] = useState<any[]>([]); const [list, setList] = useState<any[]>([]); const [sel, setSel] = useState<string[]>([]); const [busy, setBusy] = useState(false); const [lang, setLang] = useState("en");
   async function load() { try { const r = await api("/reports/mine"); setReports((r.reports || []).filter((x: any) => (x.findings || []).length > 0 || x.status !== "uploaded")); const m = await api("/multi-analyses/mine"); setList(m.analyses || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
@@ -53,8 +54,60 @@ export function PatientCombined({ api, setMessage }: { api: Api; setMessage: (s:
         : a.status === "rejected" ? <p>{a.doctorNote || "Please book an appointment so your doctor can discuss these reports with you."}</p>
           : <><p className="notice">This is an AI draft and has not been checked by a doctor yet.</p><AiView ai={a.draft} /></>}
       <Trends trends={a.trends} />
+      {a.aiPdfFileId && <button className="outline" onClick={() => downloadFile(token, a.aiPdfFileId, "MedAI-combined-report.pdf").catch((e) => setMessage(e.message))}>⬇️ Download combined PDF</button>}
     </article>)}
   </div>;
+}
+
+/** Patient: upload many files + tick earlier AI-analysed reports -> ONE combined review sent to the doctor. */
+export function SendReports({ api, token, setMessage, onDone }: { api: Api; token: string; setMessage: (s: string) => void; onDone?: () => void }) {
+  const MAX = 10;
+  const [files, setFiles] = useState<File[]>([]); const [old, setOld] = useState<any[]>([]); const [sel, setSel] = useState<string[]>([]);
+  const [combine, setCombine] = useState(true); const [lang, setLang] = useState("en"); const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState<{ t: string; ok: boolean }[]>([]); const [pdfId, setPdfId] = useState("");
+  async function loadOld() { try { const r = await api("/reports/mine"); setOld((r.reports || []).filter((x: any) => x.aiStructured?.summary || (x.findings || []).length > 0)); } catch { /* list is optional */ } }
+  useEffect(() => { loadOld(); }, []);
+  const toggle = (id: string) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  const total = files.length + sel.length;
+  async function run() {
+    if (!total) return; setBusy(true); setLog([]); setPdfId("");
+    const add = (t: string, ok = true) => setLog((l) => [...l, { t, ok }]);
+    const newIds: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]; const tag = `${i + 1}/${files.length}`;
+      try {
+        add(`⏳ ${tag} Uploading ${f.name}…`);
+        const ready = await compressImage(f);
+        const fd = new FormData(); fd.append("file", ready); fd.append("category", "patient_report");
+        const up = await postForm("/files/upload", fd, token);
+        add(`⏳ ${tag} AI is reading ${f.name}…`);
+        const an = await api(`/reports/${up.file.id}/analyze`, { method: "POST", body: json({}) });
+        newIds.push(an.report.id); add(`✅ ${f.name} analysed`);
+      } catch (e: any) { add(`❌ ${f.name}: ${e.message || "failed"} (other files continue)`, false); }
+    }
+    const ids = [...newIds, ...sel];
+    if (combine && ids.length >= 2) {
+      try {
+        add(`⏳ Combining ${ids.length} reports…`);
+        const c = await api("/reports/combine", { method: "POST", body: json({ reportIds: ids, lang }) });
+        setPdfId(c.analysis?.aiPdfFileId || ""); add(`✅ Combined analysis sent to ${c.doctorAssigned ? "your doctor" : "an admin to assign a doctor"} for review`);
+      } catch (e: any) { add(`❌ Combined analysis: ${e.message || "failed"}`, false); }
+    } else if (sel.length === 1 && !newIds.length) add("Tick at least 2 reports (or add a new file) to combine.", false);
+    else if (newIds.length) add("✅ Sent to a doctor for review");
+    setFiles([]); setSel([]); setBusy(false); await loadOld(); onDone?.();
+  }
+  return <article className="full"><h3>📤 Send reports to a doctor</h3>
+    <p className="muted">Add new files (up to {MAX}) and/or tick earlier AI-analysed reports. AI analyses the new files, then everything is reviewed together as one combined report by the doctor.</p>
+    <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={busy} onChange={(e) => { setFiles((l) => [...l, ...Array.from(e.target.files || [])].slice(0, MAX)); e.target.value = ""; }} />
+    {files.map((f, i) => <div className="row" key={f.name + i} style={{ alignItems: "center", gap: 8 }}>📎 {f.name}<button className="outline" disabled={busy} onClick={() => setFiles((l) => l.filter((_, j) => j !== i))}>✕</button></div>)}
+    {old.length > 0 && <><b>Earlier analysed reports (tick to include again)</b>
+      {old.map((r) => <label key={r._id} className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} disabled={busy} checked={sel.includes(r._id)} onChange={() => toggle(r._id)} /> {label(r.docType)} · {fmtDay(r.createdAt)} · {r.status === "signed" || r.status === "approved" ? "doctor-approved" : "AI draft"}{r.aiStructured?.summary ? " — " + String(r.aiStructured.summary).slice(0, 70) + "…" : ""}</label>)}</>}
+    <label className="row" style={{ alignItems: "center", gap: 8 }}><input type="checkbox" style={{ width: "auto" }} checked={combine} onChange={(e) => setCombine(e.target.checked)} /> Also make one combined review + PDF (old + new together)</label>
+    <div className="row"><select value={lang} onChange={(e) => setLang(e.target.value)}><option value="en">English</option><option value="bn">বাংলা</option></select>
+      <button className="primary" disabled={busy || !total} onClick={run}>{busy ? "Working…" : `Analyse & send ${total || ""} to doctor`}</button></div>
+    {log.map((l, i) => <p key={i} className={l.ok ? "muted" : "warn"}>{l.t}</p>)}
+    {pdfId && <button className="primary" onClick={() => downloadFile(token, pdfId, "MedAI-combined-report.pdf").catch((e) => setMessage(e.message))}>⬇️ Download combined PDF</button>}
+  </article>;
 }
 
 /** Doctor tab: review patients' combined analyses, or start one for your own patient. */

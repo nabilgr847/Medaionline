@@ -1,5 +1,5 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Api, json, downloadFile, postForm, fmtDate, fmtDay, fmtSize, label } from "./api";
 import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker } from "./common";
 import { printRx } from "./print";
@@ -7,6 +7,7 @@ import { DoctorCombined } from "./v38";
 import { useTabHistory } from "./tabHistory";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPhoto, DirectMessages } from "./extras";
+import QrScanner, { parseMedaiCode } from "./QrScanner";
 
 const PRESCRIBABLE = ["awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "completed", "follow_up_required"];
 const SCHEDULABLE = ["requested", "awaiting_records", "awaiting_tests", "follow_up_required"];
@@ -133,6 +134,22 @@ function PastContext({ api, appointmentId, setMessage, onUseTest }: { api: Api; 
   </div>;
 }
 
+/** Doctor types a disease name -> clickable test suggestions that are added to "Advised tests". */
+function TestFinder({ api, tests, onTest, setMessage }: { api: Api; tests: string; onTest: (line: string) => void; setMessage: (s: string) => void }) {
+  const [dx, setDx] = useState(""); const [busy, setBusy] = useState(false); const [res, setRes] = useState<any>(null);
+  const PRI: Record<string, string> = { urgent: "🔴", soon: "🟠", routine: "🟢" };
+  const have = (n: string) => tests.toLowerCase().split("\n").map((x) => x.trim()).includes(n.toLowerCase());
+  async function run() { if (dx.trim().length < 2) return; setBusy(true); setRes(null); try { setRes(await api("/ai/test-suggestions", { method: "POST", body: json({ diagnosis: dx.trim() }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
+  return <div className="aisugg"><b>🧪 Find tests by disease name</b>
+    <p className="muted">Type a disease or diagnosis (spelling mistakes are fine). Tap a test to add it to Advised tests.</p>
+    <div className="row"><input value={dx} onChange={(e) => setDx(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); run(); } }} placeholder="e.g. dengue, typhoid, diabetes, thyroid" /><button type="button" className="primary" disabled={busy || dx.trim().length < 2} onClick={run}>{busy ? "Thinking…" : "Suggest tests"}</button></div>
+    {res && <><p className="muted">For: <b>{res.diagnosis}</b>{res.note ? " · " + res.note : ""}</p>
+      <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>{(res.tests || []).map((t: any, i: number) => <button type="button" key={i} className={have(t.name) ? "outline" : "primary"} disabled={have(t.name)} title={t.reason} onClick={() => onTest(t.name)}>{have(t.name) ? "✓ " : "+ "}{PRI[t.priority] || ""} {t.name}</button>)}</div>
+      {(res.tests || []).length > 1 && <button type="button" className="outline" onClick={() => onTest((res.tests as any[]).filter((t) => !have(t.name)).map((t) => t.name).join("\n"))}>+ Add all tests</button>}
+      <p className="muted">{res.disclaimer}</p></>}
+  </div>;
+}
+
 function AiSuggest({ api, appointmentId, reportId, onUse, onTest, onField, setMessage }: { api: Api; appointmentId?: string; reportId?: string; onUse: (item: any) => void; onTest: (line: string) => void; onField: (k: string, v: string) => void; setMessage: (s: string) => void }) {
   const [dx, setDx] = useState(""); const [busy, setBusy] = useState(false); const [res, setRes] = useState<any>(null);
   async function run() { if (!appointmentId && !reportId) { setMessage("Save the prescription from an appointment or report first."); return; } setBusy(true); setRes(null); try { setRes(await api("/ai/medicine-suggestions", { method: "POST", body: json({ diagnosis: dx, appointmentId, reportId }) })); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } }
@@ -209,6 +226,7 @@ function RxEditor({ api, appointmentId, reportId, rx, onSaved, setMessage }: { a
       {items.length > 1 && <button type="button" className="danger" onClick={() => setItems(items.filter((_, n) => n !== i))}>Remove medicine</button>}
     </div>)}
     <button type="button" className="outline" onClick={() => setItems([...items, emptyItem()])}>+ Add another medicine</button>
+    <TestFinder api={api} tests={tests} onTest={addTest} setMessage={setMessage} />
     <label>Advised tests (one per line, e.g. CBC, Blood sugar)<textarea value={tests} onChange={(e) => setTests(e.target.value)} placeholder="Tests the patient should get done…" /></label>
     <label>Advice (diet, rest, lifestyle)<textarea value={cl.advice} onChange={(e) => setC("advice", e.target.value)} /></label>
     <label>Follow-up (when to come back / warning signs)<textarea value={cl.followUp} onChange={(e) => setC("followUp", e.target.value)} /></label>
@@ -249,18 +267,63 @@ const REVIEW_OPEN = ["pending_doctor_review", "under_review", "changes_requested
 const REVIEW_DONE = ["approved", "signed", "delivered"];
 function DoctorReportReview({ api, token, setMessage }: { api: Api; token: string; setMessage: (s: string) => void }) {
   const [reports, setReports] = useState<any[]>([]); const [comments, setComments] = useState<Record<string, string>>({}); const [rxFor, setRxFor] = useState(""); const [expl, setExpl] = useState<Record<string, string>>({}); const [tst, setTst] = useState<Record<string, string>>({}); const [show, setShow] = useState<"todo" | "done" | "all">("todo");
+  const [codeIn, setCodeIn] = useState(""); const [codeResult, setCodeResult] = useState<any>(null); const [secretMap, setSecretMap] = useState<Record<string, string>>({});
+  const [scanOpen, setScanOpen] = useState(false);
   async function load() { try { const d = await api("/reports/mine"); setReports((d.reports || []).filter((r: any) => r.doctorId)); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { load(); }, []);
   async function review(id: string, action: string) { try { await api(`/reports/${id}/review`, { method: "POST", body: json({ action, comment: comments[id] || "", ...(expl[id] !== undefined ? { explanation: expl[id] } : {}), ...(tst[id] !== undefined ? { tests: tst[id] } : {}) }) }); setMessage(action === "approve" ? "Report approved. Moved to Reviewed history." : `Report ${action.replace("_", " ")} successfully.`); if (["approve","reject"].includes(action)) { setRxFor(""); setComments((v)=>{const n={...v};delete n[id];return n;}); } await load(); } catch (e: any) { setMessage(e.message); } }
+  async function showSecret(id: string) {
+    try { const d = await api(`/reports/${id}/secret-code`); setSecretMap(m => ({ ...m, [id]: d.code })); }
+    catch (e: any) { setMessage(e.message); }
+  }
+  async function resolveCode(raw: string) {
+    const code = parseMedaiCode(raw) || String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (code.length < 6) { setMessage("Invalid code"); return; }
+    setCodeIn(code);
+    try {
+      const d = await api("/access-by-code", { method: "POST", body: json({ code }) });
+      setCodeResult(d);
+      setMessage(d.type === "report" ? "Report opened by secret code" : "Prescription opened by secret code");
+      setScanOpen(false);
+    } catch (e: any) { setMessage(e.message); setCodeResult(null); }
+  }
+  const onScanned = useCallback((code: string) => { resolveCode(code); }, [api]);
   const list = reports.filter((r) => (show === "all" ? true : show === "todo" ? REVIEW_OPEN.includes(r.status) : REVIEW_DONE.includes(r.status) || r.status === "rejected"));
   const dl = (id: string, name: string) => downloadFile(token, id, name).catch((e) => setMessage(e.message));
   return <div className="grid"><article className="full"><h3>Reports</h3>
+    <div className="secret-code-box" style={{ marginBottom: 12 }}>
+      <div><span className="code">Open by secret code</span><small>Patient cannot see this code. Scan QR or type to open the file.</small></div>
+      <div className="row">
+        <input value={codeIn} onChange={e => setCodeIn(e.target.value.toUpperCase())} placeholder="XXXXXXXXXX" style={{ letterSpacing: ".08em", fontFamily: "monospace" }} />
+        <button className="primary" onClick={() => resolveCode(codeIn)}>Open</button>
+        <button className="outline" type="button" onClick={() => setScanOpen(true)}>📷 Scan QR</button>
+      </div>
+    </div>
+    {scanOpen && <QrScanner onCode={onScanned} onClose={() => setScanOpen(false)} />}
+    {codeResult && <div className="item"><b>{codeResult.type}</b> · {codeResult.patient?.name || "—"} · {codeResult.status}
+      {codeResult.files?.original && <button className="outline" onClick={() => dl(codeResult.files.original.id, codeResult.files.original.name)}>Original</button>}
+      {codeResult.files?.aiPdf && <button className="outline" onClick={() => dl(codeResult.files.aiPdf, "ai.pdf")}>AI PDF</button>}
+      {codeResult.files?.finalPdf && <button className="outline" onClick={() => dl(codeResult.files.finalPdf, "final.pdf")}>Final PDF</button>}
+      {codeResult.pdf && <button className="outline" onClick={() => dl(codeResult.pdf.id, "prescription.pdf")}>Prescription PDF</button>}
+    </div>}
     <div className="row"><button className={show === "todo" ? "primary" : "outline"} onClick={() => setShow("todo")}>To review ({reports.filter((r) => REVIEW_OPEN.includes(r.status)).length})</button><button className={show === "done" ? "primary" : "outline"} onClick={() => setShow("done")}>Reviewed / prescribe</button><button className={show === "all" ? "primary" : "outline"} onClick={() => setShow("all")}>All</button><button className="outline" onClick={load}>↻ Refresh</button></div>
     {list.length === 0 && <p className="muted">No reports here.</p>}
     {list.map((r, idx) => { const open = REVIEW_OPEN.includes(r.status); const done = REVIEW_DONE.includes(r.status); return <div className="item numbered" key={r._id}>
       <div className="itemhead"><Seq n={idx + 1} /><b>{r.patientId?.name || "Patient"}</b><span className={"statuschip " + (done ? "ok" : r.status === "rejected" ? "bad" : "warn")}>{label(r.status)}</span><time>{fmtDate(r.createdAt)}</time></div>
       <p className="muted">{done ? "Doctor-approved report" : "AI-generated analysis — not doctor-approved"}</p>
-      <div className="row"><button className="outline" onClick={() => dl(r.originalFileId?._id || r.originalFileId, "original-report")}>Open original report</button>{r.aiPdfFileId && <button className="outline" onClick={() => dl(r.aiPdfFileId, "ai-analysis.pdf")}>AI PDF</button>}{r.finalPdfFileId && <button className="outline" onClick={() => dl(r.finalPdfFileId, "doctor-approved-report.pdf")}>Approved PDF</button>}</div>
+      <div className="row">
+        <button className="outline" onClick={() => dl(r.originalFileId?._id || r.originalFileId, "original-report")}>Open original report</button>
+        {r.aiPdfFileId && <button className="outline" onClick={() => dl(r.aiPdfFileId, "ai-analysis.pdf")}>AI PDF</button>}
+        {r.finalPdfFileId && <button className="outline" onClick={() => dl(r.finalPdfFileId, "doctor-approved-report.pdf")}>Approved PDF</button>}
+        <button className="outline" onClick={() => showSecret(r._id)} title="Only doctor/admin can see this code">{secretMap[r._id] ? `Code: ${secretMap[r._id]}` : "🔑 Secret code"}</button>
+      </div>
+      {secretMap[r._id] && <div className="secret-code-box">
+        <div>
+          <span className="code">{secretMap[r._id]}</span>
+          <small>Patient cannot see this. Scan the QR or type the code to open the file.</small>
+        </div>
+        <img className="secret-qr-img" alt="Secret QR" src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent("medai:report:" + secretMap[r._id])}`} />
+      </div>}
       {(open || rxFor === r._id) && <>{(r.findings || []).map((f: any, i: number) => <p key={i}>{f.name}: {f.value} {f.unit} · <b>{f.status}</b> · {f.check}</p>)}{open ? <><label>Description (AI text — you can edit it)<textarea rows={8} value={expl[r._id] ?? r.doctorExplanation ?? r.aiExplanation ?? ""} onChange={(e) => setExpl({ ...expl, [r._id]: e.target.value })} /></label><label>Advised tests (one per line)<textarea rows={3} value={tst[r._id] ?? r.advisedTests ?? ""} onChange={(e) => setTst({ ...tst, [r._id]: e.target.value })} placeholder="Tests the patient should get done…" /></label></> : <><pre className="answer">{r.doctorExplanation || r.aiExplanation}</pre>{r.advisedTests && <p style={{ whiteSpace: "pre-wrap" }}><b>Advised tests:</b> {r.advisedTests}</p>}</>}</>}
       {open && <><textarea rows={3} value={comments[r._id] || ""} onChange={(e) => setComments({ ...comments, [r._id]: e.target.value })} placeholder="Review comments / rejection reason / requested correction" />
         <div className="row"><button className="outline" onClick={() => review(r._id, "start")}>Start review</button><button className="outline" onClick={() => review(r._id, "comment")}>Save comment</button><button className="outline" onClick={() => review(r._id, "request_changes")}>Request changes</button><button className="danger" onClick={() => review(r._id, "reject")}>Reject</button><button className="primary" onClick={() => review(r._id, "approve")}>Approve &amp; sign</button></div></>}

@@ -126,9 +126,12 @@ const prescriptionSchema = new Schema({
   status:{type:String,enum:["draft","signed","voided"],default:"draft"},
   signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}, signatureImageHash:String, pdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null},
   items:[{brand:String,generic:{type:String,required:true},strength:String,form:String,dose:{type:String,required:true},frequency:{type:String,required:true},duration:{type:String,required:true},instructions:String,medicineId:{type:Schema.Types.ObjectId,ref:"Medicine"}}],
-  notes:String, advisedTests:String, clinical:{complaints:String,history:String,examination:String,vitals:String,diagnosis:String,pastTests:String,advice:String,followUp:String}, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String
+  notes:String, advisedTests:String, clinical:{complaints:String,history:String,examination:String,vitals:String,diagnosis:String,pastTests:String,advice:String,followUp:String}, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String,
+  // V3.8.3: secret access code — only admin/doctor can see
+  secretAccessCode:{type:String,index:true,sparse:true}
 },{timestamps:true});
 prescriptionSchema.index({appointmentId:1,createdAt:-1});
+prescriptionSchema.index({secretAccessCode:1},{unique:true,sparse:true});
 export const Prescription = model("Prescription",prescriptionSchema);
 // V3.8: combined analysis of several reports (trend + possible conditions), reviewed by a doctor.
 const multiAnalysisSchema = new Schema({
@@ -139,7 +142,7 @@ const multiAnalysisSchema = new Schema({
   status:{type:String,enum:["pending_doctor_review","approved","rejected"],default:"pending_doctor_review",index:true},
   trends:Schema.Types.Mixed, ai:Schema.Types.Mixed,
   doctorFinal:{summary:String,conditions:[{name:String,likelihood:String,note:String}],tests:[String],specialty:String,advice:String,urgency:String},
-  doctorNote:String, reviewedAt:Date
+  doctorNote:String, reviewedAt:Date, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}
 },{timestamps:true});
 export const MultiAnalysis = model("MultiAnalysis",multiAnalysisSchema);
 const callSignalSchema = new Schema({
@@ -158,9 +161,13 @@ const medicalReportSchema = new Schema({
   status:{type:String,enum:["uploaded","ai_processing","ai_analysis_completed","pending_doctor_review","under_review","changes_requested","rejected","approved","signed","delivered"],default:"uploaded",index:true},
   docType:{type:String,enum:["lab","imaging","prescription"],default:"lab"}, aiStructured:Schema.Types.Mixed,
   extractedText:String, analysisMode:{type:String,enum:["pdf_text_ocr","image_vision_ocr"]}, findings:[{name:String,value:String,unit:String,normalRange:String,status:String,check:String,key:String,rangeUsed:String,rangeSource:String,conflict:String,deviation:Number,measures:String,meaning:String,source:String,url:String}], urgencyLevel:String, aiExplanation:String, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, finalPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},
-  reviewComment:String, doctorExplanation:String, advisedTests:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date
+  reviewComment:String, doctorExplanation:String, advisedTests:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date,
+  // V3.8.3: secret access code — only admin/doctor can see & use; patient never receives it
+  secretAccessCode:{type:String,index:true,sparse:true},
+  simpleSummary:{type:String,default:""} // patient-friendly short summary (Bangla/English)
 },{timestamps:true});
 medicalReportSchema.index({doctorId:1,status:1,createdAt:-1});
+medicalReportSchema.index({secretAccessCode:1},{unique:true,sparse:true});
 const notificationSchema = new Schema({userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},type:{type:String,required:true},title:{type:String,required:true},message:{type:String,required:true},resourceType:String,resourceId:String,count:{type:Number,default:1},readAt:Date},{timestamps:true});
 notificationSchema.index({userId:1,createdAt:-1});
 export const MedicalReport = model("MedicalReport", medicalReportSchema);
@@ -206,3 +213,33 @@ const resetRequestSchema = new Schema({
 },{timestamps:true});
 resetRequestSchema.index({status:1,createdAt:-1});
 export const ResetRequest = model("ResetRequest",resetRequestSchema);
+
+// V3.8.3: Admin-editable disease / condition knowledge base (replaces hard-coded diseaseTests.js as source of truth)
+const diseaseSchema = new Schema({
+  names:[{type:String,required:true,trim:true}], // primary + aliases + Bangla
+  tests:[{
+    name:{type:String,required:true},
+    reason:{type:String,default:""},
+    priority:{type:String,enum:["routine","soon","urgent"],default:"routine"}
+  }],
+  notes:{type:String,default:"",maxlength:2000},
+  active:{type:Boolean,default:true},
+  source:{type:String,enum:["seed","admin","json_import","ai_prompt"],default:"admin"},
+  updatedBy:{type:Schema.Types.ObjectId,ref:"User"}
+},{timestamps:true});
+diseaseSchema.index({names:1});
+diseaseSchema.index({active:1,"names":1});
+export const Disease = model("Disease",diseaseSchema);
+
+// Access audit for secret codes
+const accessAuditSchema = new Schema({
+  actorId:{type:Schema.Types.ObjectId,ref:"User",required:true},
+  actorRole:{type:String,required:true},
+  resourceType:{type:String,enum:["report","prescription","file"],required:true},
+  resourceId:{type:Schema.Types.ObjectId,required:true},
+  codeUsed:{type:String,default:""},
+  action:{type:String,default:"open"},
+  ip:String
+},{timestamps:true});
+accessAuditSchema.index({resourceId:1,createdAt:-1});
+export const AccessAudit = model("AccessAudit",accessAuditSchema);
