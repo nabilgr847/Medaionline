@@ -1,5 +1,27 @@
 # Deploy with GitHub and Render
 
+## This deployment has two Render services
+
+| Render service | Type | Address | Role |
+|---|---|---|---|
+| `Medaionline` | web (Node) | `https://medaionline.onrender.com` | **API / backend** — answers `/api/health` with JSON |
+| `Medaionline-1` | static | `https://medaionline-1.onrender.com` | **website / frontend** — only serves the built React app |
+
+Rules that follow from this:
+
+- The frontend's `VITE_API_URL` must be the **backend** host. The website host answers
+  every path with `index.html`, so pointing the app at it can only produce "Failed to fetch".
+- The app now refuses to use the website host as the API (`FRONTEND_HOSTS` in
+  `apps/web/src/api.ts`) and skips it while auto-detecting, so an old `VITE_API_URL` no
+  longer breaks a fresh build — but fix it anyway.
+- The backend's `CLIENT_ORIGIN` must list the website host:
+  `https://medaionline-1.onrender.com` (comma-separated list is supported).
+- The APK bakes the API address at build time (`vars.MEDAI_API_URL`, default
+  `https://medaionline.onrender.com`), and can be corrected after installation from the
+  sign-in screen's **Server address** panel — no need to log in first.
+- The sign-in screen's **Test connection** button reports which one of the four states the
+  address is in: reachable / blocks this app (CORS) / is the website, not the API / no answer.
+
 ## "Failed to fetch" — the site or app cannot reach the API
 
 The web app and the APK now say **exactly** what is wrong instead of a generic network error.

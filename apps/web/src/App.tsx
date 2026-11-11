@@ -1,7 +1,7 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { AdminRecovery } from "./v38";
 import { useEffect, useState } from "react";
-import { makeApi, json, API, pingServer } from "./api";
+import { makeApi, json, API, pingServer, setApiBase, clearApiBase } from "./api";
 import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
@@ -98,6 +98,40 @@ function MainApp() {
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [name, setName] = useState(""); const [resetEmail, setResetEmail] = useState("");
   const [message, setMessage] = useState(""); const [pendingNote, setPendingNote] = useState<any>(null);
   const [step, setStep] = useState<"form" | "code" | "reset">("form"); const [code, setCode] = useState(""); const [newPassword, setNewPassword] = useState("");
+  // The server address shown on the sign-in screen. It is editable *before* logging in, so a
+  // wrong API host can never lock a user out of their own app again.
+  const [apiLabel, setApiLabel] = useState(API || "");
+  const [serverInput, setServerInput] = useState(API || "");
+  const [serverNote, setServerNote] = useState(""); const [serverOk, setServerOk] = useState(false);
+  const [serverBusy, setServerBusy] = useState(false);
+  async function saveServerAddress(e: any) {
+    e?.preventDefault?.();
+    setServerBusy(true); setServerNote("");
+    const r = setApiBase(serverInput);
+    if (!r.ok) { setServerOk(false); setServerNote(r.message); setServerBusy(false); return; }
+    const p = await pingServer();
+    setDiag(p); setApiLabel(p.base || serverInput); setServerOk(p.ok);
+    setServerNote(p.ok ? "Saved. " + p.detail : "Saved, but " + p.detail);
+    setServerBusy(false);
+  }
+  // Resolve the API host once on load so the label never shows the website by mistake.
+  useEffect(() => {
+    let alive = true;
+    pingServer().then((p) => {
+      if (!alive) return;
+      if (p.base) { setApiLabel(p.base); setServerInput(p.base); }
+      if (!p.ok) setDiag(p);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  async function useAutomaticServer() {
+    setServerBusy(true); setServerNote("");
+    clearApiBase();
+    const p = await pingServer();
+    setDiag(p); setApiLabel(p.base || ""); setServerOk(p.ok); setServerInput(p.base || "");
+    setServerNote(p.ok ? "Automatic detection found " + p.base.replace(/^https?:\/\//, "") : "Automatic detection: " + p.detail);
+    setServerBusy(false);
+  }
   const api = makeApi(token);
 
   function setToken(t: string) { if (t) localStorage.setItem("medai_token", t); else localStorage.removeItem("medai_token"); setTokenState(t); }
@@ -225,12 +259,24 @@ function MainApp() {
         </form>}
         {message && <p className="notice" role="status" aria-live="polite">{message}</p>}
         <div className="servercheck">
-          <span>Server: <code>{API ? API.replace(/^https?:\/\//, "") : "not configured in this build"}</code></span>
-          <button type="button" className="link" disabled={pinging} onClick={async () => { setPinging(true); setDiag(await pingServer()); setPinging(false); }}>
+          <span>Server: <code>{apiLabel ? apiLabel.replace(/^https?:\/\//, "") : "not configured in this build"}</code></span>
+          <button type="button" className="link" disabled={pinging} onClick={async () => { setPinging(true); const p = await pingServer(); setDiag(p); if (p.base) setApiLabel(p.base); setPinging(false); }}>
             {pinging ? "Testing…" : "Test connection"}
           </button>
-          {diag && <span className={diag.ok ? "ok" : diag.status === "blocked" ? "warn" : "bad"}>{diag.detail}</span>}
+          {diag && <span className={diag.ok ? "ok" : diag.status === "blocked" || diag.status === "notapi" ? "warn" : "bad"}>{diag.detail}</span>}
         </div>
+        <details className="serverfix">
+          <summary>Server address</summary>
+          <form onSubmit={saveServerAddress}>
+            <input type="url" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://your-api.onrender.com" value={serverInput} onChange={(e) => setServerInput(e.target.value)} />
+            <div className="row">
+              <button className="primary" disabled={serverBusy}>{serverBusy ? "Checking…" : "Save and test"}</button>
+              <button type="button" className="outline" disabled={serverBusy} onClick={useAutomaticServer}>Automatic</button>
+            </div>
+          </form>
+          <p className="muted small">MedAI Hospital has two services on Render: the <b>API</b> (backend) and the <b>website</b> (frontend). Enter the API address — it answers <code>/api/health</code> with JSON.</p>
+          {serverNote && <p className={serverOk ? "ok small" : "warn small"}>{serverNote}</p>}
+        </details>
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
 

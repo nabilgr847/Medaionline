@@ -27,7 +27,7 @@ services:
       - key: ADMIN_RECOVERY_KEY
         generateValue: true
       - key: CLIENT_ORIGIN
-        sync: false
+        value: https://medaionline-1.onrender.com,https://medaionline.onrender.com
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
@@ -83,7 +83,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: medai-hospital-v2-api
-          property: host    # the app adds https:// itself and can still auto-detect
+        value: https://medaionline.onrender.com   # the backend service, never the static site
