@@ -19,7 +19,7 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
-        sync: false
+        generateValue: true   # Render generates it; no manual step, and it is long enough (32+ chars)
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
@@ -83,4 +83,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        sync: false
+        fromService:
+          type: web
+          name: medai-hospital-v2-api
+          property: host    # the app adds https:// itself and can still auto-detect

@@ -80,7 +80,7 @@ function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
   const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!localStorage.getItem("medai_token"));
   const [menuOpen, setMenuOpen] = useState(false);
-  const [diag, setDiag] = useState<{ ok: boolean; ms: number; detail: string } | null>(null);
+  const [diag, setDiag] = useState<{ ok: boolean; ms: number; status?: string; base?: string; detail: string } | null>(null);
   const [pinging, setPinging] = useState(false);
   useEffect(() => {
     if (!menuOpen) return;
@@ -229,7 +229,7 @@ function MainApp() {
           <button type="button" className="link" disabled={pinging} onClick={async () => { setPinging(true); setDiag(await pingServer()); setPinging(false); }}>
             {pinging ? "Testing…" : "Test connection"}
           </button>
-          {diag && <span className={diag.ok ? "ok" : "bad"}>{diag.ok ? "Reachable (" + diag.ms + " ms)" : diag.detail}</span>}
+          {diag && <span className={diag.ok ? "ok" : diag.status === "blocked" ? "warn" : "bad"}>{diag.detail}</span>}
         </div>
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
@@ -271,7 +271,7 @@ function ResetPassword() {
       <ul className="rules">{rules.map(([t, v]) => <li key={t} className={v ? "ok" : ""}>{v ? "✓" : "○"} {t}</li>)}</ul>
       <button className="primary" disabled={busy}>{busy ? "Saving…" : "Set new password"}</button></form>}
     {message && <p className={ok ? "notice" : "warn"} role="status" aria-live="polite">{message}</p>}
-    {ok && <a className="bannerlink" href="/">Continue</a>}</div></div>;
+    {ok ? <a className="bannerlink" href="/">Continue to MedAI</a> : <p className="muted small"><a href="/">← Back to sign in</a></p>}</div></div>;
 }
 
 export default function App() { const q=new URLSearchParams(window.location.search); return q.has("recovery") ? <AdminRecovery /> : q.has("consult") ? <GuestConsultRoom /> : q.has("call") ? <CallPage /> : window.location.pathname === "/reset-password" || resetTokenFromUrl() ? <ResetPassword /> : <MainApp />; }

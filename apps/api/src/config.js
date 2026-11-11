@@ -2,9 +2,13 @@
 import dotenv from "dotenv";
 import path from "path";
 dotenv.config();
-const required = ["MONGODB_URI", "JWT_SECRET"];
-for (const key of required) if (!process.env[key]) throw new Error(`Missing environment variable: ${key}`);
-if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
+// Do not crash the whole process on a missing variable: a crashed container only shows
+// "Failed to fetch" to the web app / APK. Collect the problems instead, boot the HTTP
+// server, and answer every request with the exact reason (see server.js).
+export const configProblems = [];
+for (const key of ["MONGODB_URI", "JWT_SECRET"]) if (!process.env[key]) configProblems.push(`Missing environment variable: ${key}`);
+if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) configProblems.push("JWT_SECRET must be at least 32 characters");
+if (configProblems.length) console.error("CONFIGURATION PROBLEM:", configProblems.join(" | "));
 export const config = {
   port: Number(process.env.PORT || 4000),
   mongoUri: process.env.MONGODB_URI,

@@ -26,6 +26,13 @@ See `CHANGELOG_V3_6_4_GUEST_ROOM.md` for the latest guest-room changes and `docs
 - MongoDB Atlas and Render configuration
 - API health check and deployment documentation
 
+## Server unreachable? ("Failed to fetch")
+The app now prints the real reason. Open `https://<API-host>/api/health`:
+`status: ok` means the API is fine, `status: misconfigured` names the missing environment
+variable, and no answer at all means the service is not running. Full checklist:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). On Render's free plan deploy `render.free.yaml`
+instead of `render.yaml` (the paid blueprint's disk cannot be created on free accounts).
+
 ## Safety and deployment status
 This is a functional MVP source project, **not a licensed hospital, validated medical device, or production-certified telemedicine service**. Real clinical operation requires qualified clinical governance, applicable Bangladesh regulatory/legal review, BMDC verification process, privacy/data processing review, security penetration testing, backup/restore drills, and real vendor integrations.
 
