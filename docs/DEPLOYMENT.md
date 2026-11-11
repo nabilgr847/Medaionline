@@ -22,6 +22,22 @@ Rules that follow from this:
 - The sign-in screen's **Test connection** button reports which one of the four states the
   address is in: reachable / blocks this app (CORS) / is the website, not the API / no answer.
 
+## Sign-in screen: connection diagnostics and biometric login
+
+- The `Server:` / `Test connection` / `Server address` block is **hidden** on the public
+  sign-in page. Add `?debug=1` to the URL (e.g.
+  `https://medaionline-1.onrender.com/?debug=1`) to show it, or use
+  **Settings → Security** once signed in.
+- **Fingerprint / face sign-in** (Android app only):
+  1. Sign in with the password once. The app offers *"Use fingerprint next time?"*.
+  2. Turn it on — the session is stored in a separate slot (`medai_bio_token`).
+  3. Next launch: the lock screen appears and the device prompt opens automatically, and
+     the sign-in page also offers *"Sign in with fingerprint"*.
+  4. A real **Sign out** (menu) deletes that stored session; *"Use password instead"* on the
+     lock screen keeps it, so fingerprint sign-in still works afterwards.
+  5. No sensor enrolled → the app says so instead of failing silently; Settings → Security →
+     *Test* verifies the prompt without signing out.
+
 ## "Failed to fetch" — the site or app cannot reach the API
 
 The web app and the APK now say **exactly** what is wrong instead of a generic network error.

@@ -11,9 +11,14 @@ import { BannerSlider, BannerContext } from "./common";
 import GuestConsultRoom from "./GuestConsultRoom";
 import TeleVisitCall from "./TeleVisitCall";
 import CommercialPanel from "./CommercialPanel";
-import { biometricLockEnabled, isNativeApp, unlockWithBiometric } from "./biometric";
+import { biometricLockEnabled, setBiometricLockEnabled, isNativeApp, unlockWithBiometric, checkBiometrics, biometricLabel, biometricToken, saveBiometricToken, forgetBiometricToken } from "./biometric";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
+
+/** Connection diagnostics are for troubleshooting only: they stay off the public sign-in
+ *  page unless the visitor asks for them with ?debug=1 (Settings -> Security has the same
+ *  controls once signed in). */
+const DEBUG_UI = (() => { try { return new URLSearchParams(location.search).has("debug"); } catch { return false; } })();
 const norm = (u: any): User => ({ ...u, id: u.id || u._id });
 
 /** WhatsApp-style incoming call alert for patients and doctors, shown on any page of the dashboard. */
@@ -78,7 +83,7 @@ function BiometricLock({ userName, onUnlock, onSignOut }: { userName?: string; o
 
 function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
-  const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!localStorage.getItem("medai_token"));
+  const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!(localStorage.getItem("medai_token") || biometricToken()));
   const [menuOpen, setMenuOpen] = useState(false);
   const [diag, setDiag] = useState<{ ok: boolean; ms: number; status?: string; base?: string; detail: string } | null>(null);
   const [pinging, setPinging] = useState(false);
@@ -114,6 +119,45 @@ function MainApp() {
     setServerNote(p.ok ? "Saved. " + p.detail : "Saved, but " + p.detail);
     setServerBusy(false);
   }
+  const nativeApp = isNativeApp();
+  const [bio, setBio] = useState<{ available: boolean; type: string; reason?: string }>({ available: false, type: "none" });
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioNote, setBioNote] = useState("");
+  const [askBio, setAskBio] = useState(false);
+  useEffect(() => {
+    if (!nativeApp) return;
+    let alive = true;
+    checkBiometrics().then((c) => {
+      if (!alive) return;
+      setBio(c.ok ? { available: c.available, type: c.type } : { available: false, type: "none", reason: c.reason });
+    }).catch(() => { /* no native bridge in a browser build */ });
+    return () => { alive = false; };
+  }, [nativeApp]);
+
+  /** Fingerprint / face sign-in: a successful device check unlocks the kept session. */
+  async function signInWithBiometric() {
+    setBioNote(""); setBioBusy(true);
+    try {
+      const saved = biometricToken();
+      if (!saved) { setBioNote("Sign in with your password once; after that you can use " + biometricLabel(bio.type) + "."); return; }
+      const r = await unlockWithBiometric("Sign in to MedAI Hospital");
+      if (!r.ok) { if (!r.cancelled) setBioNote(r.reason); return; }
+      const me = await makeApi(saved)("/auth/me");
+      setToken(saved); setUser(norm(me.user));
+    } catch (x: any) {
+      // The kept session is gone or expired: drop it so the password path is used next time.
+      forgetBiometricToken();
+      setBioNote(x?.status === 401 ? "Your saved session expired. Please sign in with your password once." : (x?.message || "Fingerprint sign-in failed. Use your password."));
+    } finally { setBioBusy(false); }
+  }
+
+  /** Offered right after a successful password sign-in (native app + working sensor). */
+  function turnOnBiometric() {
+    saveBiometricToken(localStorage.getItem("medai_token") || "");
+    setBiometricLockEnabled(true);
+    setAskBio(false);
+  }
+
   // Resolve the API host once on load so the label never shows the website by mistake.
   useEffect(() => {
     let alive = true;
@@ -135,8 +179,21 @@ function MainApp() {
   const api = makeApi(token);
 
   function setToken(t: string) { if (t) localStorage.setItem("medai_token", t); else localStorage.removeItem("medai_token"); setTokenState(t); }
-  function logout() { setToken(""); setUser(null); setMessage(""); }
-  useEffect(() => { if (token) api("/auth/me").then((d) => setUser(norm(d.user))).catch(() => { setToken(""); }); }, []);
+  function logout() {
+    setToken(""); setUser(null); setMessage("");
+    forgetBiometricToken();          // a real sign-out must not leave a usable session
+    setAskBio(false); setBioNote("");
+  }
+  // Re-runs when the session changes, so a token restored by the fingerprint lock screen or
+  // by "Sign in with fingerprint" actually loads the account instead of sitting unused.
+  useEffect(() => {
+    if (!token) { setUser(null); return; }
+    let alive = true;
+    api("/auth/me")
+      .then((d) => { if (alive) setUser(norm(d.user)); })
+      .catch((x: any) => { if (alive && x?.status === 401) setToken(""); });
+    return () => { alive = false; };
+  }, [token]);
   useEffect(() => {
     if (!token || !user) return;
     const beat = () => api("/presence/heartbeat", { method: "POST", body: json({}) }).catch(() => {});
@@ -150,6 +207,10 @@ function MainApp() {
       if (mode === "register") { const r = await api("/auth/register", { method: "POST", body: json({ name, email, password }) }); setMessage(r.message); setPassword(""); if (r.needsVerification) { setStep("code"); setCode(""); } else setMode("login"); return; }
       const d = await api("/auth/login", { method: "POST", body: json({ email, password }) });
       setToken(d.token); setUser(norm(d.user)); setPassword("");
+      if (isNativeApp()) {
+        if (biometricLockEnabled()) saveBiometricToken(d.token);
+        else if (bio.available) setAskBio(true);
+      }
     } catch (x: any) {
       setMessage(x.message);
       if (x.data?.status === "pending_email") { setStep("code"); setCode(""); }
@@ -171,7 +232,13 @@ function MainApp() {
   }
   async function requestReset() { try { const d = await api("/auth/password-reset/request", { method: "POST", body: json({ email: resetEmail || email }) }); setMessage(d.message); } catch (x: any) { setMessage(x.message); } }
 
-  if (locked) return <BiometricLock userName={user?.name} onUnlock={() => setLocked(false)} onSignOut={() => { setLocked(false); logout(); }} />;
+  if (locked) return <BiometricLock userName={user?.name}
+    onUnlock={() => { const kept = localStorage.getItem("medai_token") || biometricToken(); if (kept) setToken(kept); setLocked(false); }}
+    onSignOut={() => {
+      // Only the active session is dropped, so "Sign in with fingerprint" still works from
+      // the login page; a real sign-out (menu) removes the biometric session too.
+      localStorage.removeItem("medai_token"); setTokenState(""); setUser(null); setMessage(""); setLocked(false);
+    }} />;
 
   return <BannerContext.Provider value={banner}><div className="shell">
     <header>
@@ -239,6 +306,21 @@ function MainApp() {
             <input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} placeholder={mode === "register" ? "Password (minimum 12 characters)" : "Password"} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "register" ? 12 : 1} />
             {mode === "register" && <p className="muted">We will email a 6-digit code to verify your email address.</p>}
             <button className="primary">{mode === "login" ? "Sign in" : "Send verification code"}</button></form>
+          {mode === "login" && nativeApp && biometricLockEnabled() && (
+            <div className="biologin">
+              <button type="button" className="outline biobtn" disabled={bioBusy} onClick={signInWithBiometric}>
+                {bioBusy ? "Waiting for " + biometricLabel(bio.type) + "\u2026" : "Sign in with " + biometricLabel(bio.type)}
+              </button>
+              {bioNote && <p className="warn small" role="alert">{bioNote}</p>}
+            </div>
+          )}
+          {mode === "login" && askBio && (
+            <div className="bioask">
+              <b>Use {biometricLabel(bio.type)} next time?</b>
+              <p className="muted small">Unlock MedAI with {biometricLabel(bio.type)} instead of typing your password. You can switch this off any time in Settings, Security.</p>
+              <div className="row"><button type="button" className="primary" onClick={turnOnBiometric}>Turn on</button><button type="button" className="outline" onClick={() => setAskBio(false)}>Not now</button></div>
+            </div>
+          )}
           <button className="link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setMessage(""); }}>{mode === "login" ? "Create a patient account" : "Back to sign in"}</button>
           <div className="doctorbox"><b>Are you a doctor?</b><div className="row"><button className="outline" onClick={() => { setView("apply"); setMessage(""); }}>Apply for a doctor account</button><button className="outline" onClick={() => { setView("more"); setMessage(""); }}>Send requested documents</button></div></div>
           {mode === "login" && <button className="link" onClick={() => { setStep("reset"); setResetEmail(email); setCode(""); setNewPassword(""); setMessage(""); }}>Forgot password?</button>}
@@ -258,6 +340,7 @@ function MainApp() {
           <button type="button" className="link" onClick={() => { setStep("form"); setMessage(""); }}>Back to sign in</button>
         </form>}
         {message && <p className="notice" role="status" aria-live="polite">{message}</p>}
+        {DEBUG_UI && <>
         <div className="servercheck">
           <span>Server: <code>{apiLabel ? apiLabel.replace(/^https?:\/\//, "") : "not configured in this build"}</code></span>
           <button type="button" className="link" disabled={pinging} onClick={async () => { setPinging(true); const p = await pingServer(); setDiag(p); if (p.base) setApiLabel(p.base); setPinging(false); }}>
@@ -277,6 +360,7 @@ function MainApp() {
           <p className="muted small">MedAI Hospital has two services on Render: the <b>API</b> (backend) and the <b>website</b> (frontend). Enter the API address — it answers <code>/api/health</code> with JSON.</p>
           {serverNote && <p className={serverOk ? "ok small" : "warn small"}>{serverNote}</p>}
         </details>
+        </>}
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
 

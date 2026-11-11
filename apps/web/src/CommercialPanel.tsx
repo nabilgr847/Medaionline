@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { makeApi, json, fmtDate, fmtSize, API } from "./api";
 import { Tabs } from "./common";
-import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled } from "./biometric";
+import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled, biometricLabel, saveBiometricToken } from "./biometric";
 import { pingServer, setApiBase, clearApiBase } from "./api";
 
 type Role = "patient" | "doctor" | "admin";
@@ -552,7 +552,7 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 <div style={{ fontSize: 13, color: "#64748b" }}>
                   {!native ? "Available in the Android app only (this page is running in a browser)."
                     : bioAvail === null ? "Checking this device…"
-                    : bioAvail.available ? "Detected: " + bioAvail.type
+                    : bioAvail.available ? "Detected: " + biometricLabel(bioAvail.type)
                     : bioAvail.reason}
                 </div>
               </div>
@@ -570,6 +570,8 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                       return;
                     }
                     setBiometricLockEnabled(true);
+                    // Keep this session for the sign-in screen / lock screen on this device.
+                    saveBiometricToken(localStorage.getItem("medai_token") || token || "");
                   } else {
                     setBiometricLockEnabled(false);
                   }
