@@ -53,14 +53,7 @@ jobs:
           gh release delete apk-latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
           gh release create apk-latest MedAI-Hospital.apk --repo "${{ github.repository }}" \
             --title "MedAI Hospital Android APK" \
-            --notes "MedAI Hospital for Android.
-
-* Fingerprint / face unlock: turn it on in Security, then reopen the app and unlock with your finger instead of the password (re-locks after 2 minutes in the background).
-* Medicine tracker: add reminders, log each dose as taken or skipped, and watch your adherence score.
-* The whole web app is bundled inside the APK, so the interface opens instantly even on a slow connection.
-* Camera, microphone, gallery, file download and print all use the native Android bridge.
-
-Download MedAI-Hospital.apk and install (allow install from unknown sources when Android asks)."
+            --notes-file apps/mobile/RELEASE_NOTES_ANDROID.md
 
       - uses: actions/upload-artifact@v4
         with:
