@@ -79,6 +79,15 @@ function BiometricLock({ userName, onUnlock, onSignOut }: { userName?: string; o
 function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
   const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!localStorage.getItem("medai_token"));
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = previous; };
+  }, [menuOpen]);
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<"home" | "apply" | "more">("home");
   const [mode, setMode] = useState("login");
@@ -129,15 +138,57 @@ function MainApp() {
   if (locked) return <BiometricLock userName={user?.name} onUnlock={() => setLocked(false)} onSignOut={() => { setLocked(false); logout(); }} />;
 
   return <BannerContext.Provider value={banner}><div className="shell">
-    <header><img src="/branding/medai-logo.svg" alt="MedAI Hospital" />
-      <nav>
+    <header>
+      <a className="brand" href="#top" aria-label="MedAI Hospital home"><img src="/branding/medai-logo.svg" alt="MedAI Hospital" /></a>
+      <nav className="desktopnav">
         <a href="#services">Services</a>
         <a href="#safety">Safety</a>
         {!user && <a href="#portal" onClick={() => setView("home")}>Sign in</a>}
         {user && <a href="#dashboard" onClick={(e) => { e.preventDefault(); document.getElementById("dashboard")?.scrollIntoView({ behavior: "smooth" }); }}>Dashboard</a>}
       </nav>
-      {user && <div className="row"><span className="role">{user.name} · {user.role}</span><button className="outline" onClick={logout}>Sign out</button></div>}
+      {user && <div className="row headeruser"><span className="role">{user.name} · {user.role}</span><button className="outline" onClick={logout}>Sign out</button></div>}
+      <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen} aria-haspopup="dialog">
+        <span aria-hidden="true"><i /><i /><i /></span>
+        <em>Menu</em>
+      </button>
     </header>
+
+    {menuOpen && (
+      <div className="drawerwrap" role="dialog" aria-modal="true" aria-label="Main menu">
+        <div className="drawerbackdrop" onClick={() => setMenuOpen(false)} />
+        <aside className="drawer">
+          <div className="drawerhead">
+            <img src="/branding/medai-logo.svg" alt="MedAI Hospital" />
+            <button className="iconbtn" onClick={() => setMenuOpen(false)} aria-label="Close menu">✕</button>
+          </div>
+
+          {user ? (
+            <div className="draweruser">
+              <span className="avatar" aria-hidden="true">{String(user.name || "MedAI").trim().charAt(0).toUpperCase()}</span>
+              <div><strong>{user.name}</strong><small>{user.email} · {user.role}</small></div>
+            </div>
+          ) : (
+            <div className="draweruser">
+              <span className="avatar" aria-hidden="true">M</span>
+              <div><strong>Welcome to MedAI</strong><small>Sign in to reach your dashboard</small></div>
+            </div>
+          )}
+
+          <div className="drawerlinks">
+            {user && <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("dashboard")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🏠</span>Dashboard</button>}
+            {!user && <button className="draweritem" onClick={() => { setMenuOpen(false); setView("home"); document.getElementById("portal")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🔑</span>Sign in / Create account</button>}
+            <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("services")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">✚</span>Services</button>
+            <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("safety")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🛡️</span>Safety &amp; privacy</button>
+            {!user && <button className="draweritem" onClick={() => { setMenuOpen(false); setView("apply"); }}><span aria-hidden="true">👨‍⚕️</span>Apply for a doctor account</button>}
+          </div>
+
+          <div className="drawerfoot">
+            {user && <button className="primary drawerwide" onClick={() => { setMenuOpen(false); logout(); }}>Sign out</button>}
+            <p>MedAI Hospital · Secure patient care</p>
+          </div>
+        </aside>
+      </div>
+    )}
 
     {!user && view === "apply" && <DoctorApply mode="new" onBack={() => setView("home")} />}
     {!user && view === "more" && <DoctorApply mode="more" onBack={() => setView("home")} />}

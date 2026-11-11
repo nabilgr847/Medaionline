@@ -7,8 +7,78 @@ export const BannerContext = createContext<any>(null);
 const ICONS: Record<string, string> = { appointments: "📅", requests: "📥", rx: "💊", reports: "📄", notifications: "🔔", profile: "👤", nearby: "📍", medicines: "🔎", ai: "🤖", account: "⚙️", doctors: "✅", users: "👥", monitor: "📡", import: "⬆️", banner: "🖼️", specialties: "🏷️", security: "🔒", resets: "🔑", schedule: "🗓️", messages: "💬", direct: "💬", temporary: "🔗" };
 
 export function Tabs({ tabs, tab, setTab, badges, strip }: { tabs: [string, string][]; tab: string; setTab: (t: string) => void; badges?: Record<string, number>; strip?: string }) {
-  return <>{strip && tab !== "ai" && <BannerStrip where={strip} />}<div className="tabs">{tabs.map(([id, text]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
-    {ICONS[id] ? ICONS[id] + " " : ""}{text}{badges && badges[id] > 0 && <span className="reddot" aria-label={badges[id] + " new"}>{badges[id] > 9 ? "9+" : badges[id]}</span>}</button>)}</div></>;
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const current = tabs.find(([id]) => id === tab);
+  const badgeFor = (id: string) => (badges && badges[id] > 0 ? (badges[id] > 9 ? "9+" : badges[id]) : "");
+  const totalAlerts = Object.values(badges || {}).reduce((n: number, v: any) => n + (Number(v) || 0), 0);
+
+  // Close on Escape, lock the page behind the sheet, restore focus behaviour.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = previous; };
+  }, [open]);
+
+  function choose(id: string) { setTab(id); setOpen(false); setQ(""); }
+
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? tabs.filter(([, text]) => text.toLowerCase().includes(needle)) : tabs;
+
+  return <>
+    {strip && tab !== "ai" && <BannerStrip where={strip} />}
+
+    {/* Desktop / tablet: the full grid of tabs. */}
+    <div className="tabs tabs-desktop" role="tablist">
+      {tabs.map(([id, text]) => (
+        <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+          {ICONS[id] ? ICONS[id] + " " : ""}{text}
+          {badgeFor(id) && <span className="reddot" aria-label={badges![id] + " new"}>{badgeFor(id)}</span>}
+        </button>
+      ))}
+    </div>
+
+    {/* Phones: one compact bar, everything else behind the hamburger. */}
+    <div className="tabnav">
+      <button className="tabnav-btn" onClick={() => setOpen(true)} aria-expanded={open} aria-haspopup="dialog">
+        <span className="burger" aria-hidden="true"><i /><i /><i /></span>
+        <span className="tabnav-label">
+          <small>Menu</small>
+          <strong>{ICONS[tab] ? ICONS[tab] + " " : ""}{current ? current[1] : "Choose"}</strong>
+        </span>
+        {totalAlerts > 0 && <span className="reddot">{totalAlerts > 9 ? "9+" : totalAlerts}</span>}
+      </button>
+    </div>
+
+    {open && (
+      <div className="sheetwrap" role="dialog" aria-modal="true" aria-label="Menu">
+        <div className="sheetbackdrop" onClick={() => setOpen(false)} />
+        <div className="sheet">
+          <div className="sheetgrip" aria-hidden="true" />
+          <div className="sheethead">
+            <strong>Menu</strong>
+            <button className="iconbtn" onClick={() => setOpen(false)} aria-label="Close menu">✕</button>
+          </div>
+          {tabs.length > 7 && (
+            <input className="sheetsearch" placeholder="Search menu…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search menu" />
+          )}
+          <div className="sheetlist">
+            {shown.map(([id, text]) => (
+              <button key={id} className={"sheetitem" + (tab === id ? " active" : "")} onClick={() => choose(id)}>
+                <span className="sheetico" aria-hidden="true">{ICONS[id] || "•"}</span>
+                <span className="sheetlabel">{text}</span>
+                {badgeFor(id) && <span className="reddot">{badgeFor(id)}</span>}
+              </button>
+            ))}
+            {shown.length === 0 && <div className="sheetempty">Nothing matches “{q}”.</div>}
+          </div>
+        </div>
+      </div>
+    )}
+  </>;
 }
 
 // Red-dot counters shown on tab buttons. Polls every 30 s and when the tab regains focus.
