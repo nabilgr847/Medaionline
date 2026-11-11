@@ -18,10 +18,43 @@ jobs:
         with:
           node-version: 20
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
+
+      - name: Build web app for local bundling
+        working-directory: apps/web
+        # The bundle is frozen into the APK, so the API URL has to be present at
+        # build time. Without it every screen inside the app fails with
+        # "The MedAI API URL is not configured". Override with the repository
+        # variable MEDAI_API_URL if the API ever moves.
+        env:
+          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline-1.onrender.com' }}
+        run: |
+          npm install
+          npm run build
+          rm -rf ../mobile/www
+          cp -r dist ../mobile/www
+
+      - name: Verify the bundled app points at the API
+        env:
+          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline-1.onrender.com' }}
+        run: |
+          host="${VITE_API_URL#https://}"; host="${host#http://}"; host="${host%%/*}"
+          echo "Expecting API host in bundle: $host"
+          if ! grep -rqF "$host" apps/mobile/www/assets; then
+            echo "::error::The APK bundle does not contain $host — the app would not be able to sign in."
+            exit 1
+          fi
+          if grep -rqF "The MedAI API URL is not configured" apps/mobile/www/assets/index-*.js && [ -z "$host" ]; then
+            echo "::error::Bundle built without an API URL."
+            exit 1
+          fi
+          if ! grep -q "nativeShell" apps/mobile/www/index.html; then
+            echo "::warning::index.html no longer guards the service worker; it may serve a stale app inside the APK."
+          fi
+          echo "Bundle check passed."
 
       - name: Create Android project
         working-directory: apps/mobile
@@ -45,7 +78,7 @@ jobs:
           gh release delete apk-latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
           gh release create apk-latest MedAI-Hospital.apk --repo "${{ github.repository }}" \
             --title "MedAI Hospital Android APK" \
-            --notes "Latest Android build. Opens the live MedAI web app. Download MedAI-Hospital.apk and install."
+            --notes-file apps/mobile/RELEASE_NOTES_ANDROID.md
 
       - uses: actions/upload-artifact@v4
         with:

@@ -3,12 +3,35 @@
   "appName": "MedAI Hospital",
   "webDir": "www",
   "server": {
-    "url": "https://medaionline-1.onrender.com",
-    "cleartext": false,
-    "allowNavigation": ["medaionline-1.onrender.com"]
+    "androidScheme": "https",
+    "cleartext": false
   },
   "android": {
     "allowMixedContent": false,
-    "backgroundColor": "#092b46"
+    "backgroundColor": "#092b46",
+    "buildOptions": {
+      "release": {
+        "keystoreFile": "../../medai-release.jks",
+        "keystorePassword": "medaiapp2026",
+        "keyAlias": "medai",
+        "keyPassword": "medaiapp2026"
+      }
+    }
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "backgroundColor": "#092b46",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP"
+    },
+    "PushNotifications": {
+      "presentationOptions": [
+        "badge",
+        "sound",
+        "alert"
+      ]
+    }
   }
 }

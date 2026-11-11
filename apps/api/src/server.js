@@ -1,12 +1,13 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import express from "express";
 import crypto from "crypto";
-import cors from "cors";
+import corsMiddleware from "./cors.js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
 import {config} from "./config.js";
 import routes from "./routes.js";
+import commercialRoutes from "./commercial.js";
 import {User, Appointment, SystemError, CallSession} from "./models.js";
 import {hashPassword} from "./security.js";
 
@@ -19,7 +20,7 @@ const app=express();
 app.disable("x-powered-by");
 app.set("trust proxy",1); // Render/other reverse proxies: use the real client IP for rate limits and audit logs
 app.use(helmet());
-app.use(cors({origin:config.clientOrigin}));
+app.use(corsMiddleware);
 app.use(express.json({limit:"10mb"}));
 // Global limiter. Must answer in JSON (the web app parses it), and must not count the guest-room / heartbeat
 // polling requests: those fire every 1-3 seconds and would otherwise exhaust the IP's budget within minutes,
@@ -28,6 +29,7 @@ const POLLING_PATH=/^\/api\/(temporary-consults\/[^/]+\/room\/|presence\/heartbe
 app.use(rateLimit({windowMs:15*60*1000,limit:600,standardHeaders:true,legacyHeaders:false,skip:req=>POLLING_PATH.test(req.originalUrl.split("?")[0]),message:{error:"Too many requests. Please wait a minute and try again."}}));
 app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"MedAI Hospital API"}));
 app.use("/api",routes);
+app.use("/api/commercial",commercialRoutes);
 app.use((err,req,res,_next)=>{
   const requestId=crypto.randomUUID();
   console.error("API error:",{requestId,name:err.name,message:err.message,method:req.method,path:req.path});

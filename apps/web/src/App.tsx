@@ -10,6 +10,8 @@ import { AlertCenter } from "./extras";
 import { BannerSlider, BannerContext } from "./common";
 import GuestConsultRoom from "./GuestConsultRoom";
 import TeleVisitCall from "./TeleVisitCall";
+import CommercialPanel from "./CommercialPanel";
+import { biometricLockEnabled, isNativeApp, unlockWithBiometric } from "./biometric";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 const norm = (u: any): User => ({ ...u, id: u.id || u._id });
@@ -50,8 +52,33 @@ function CallPage() {
     {user && id && <TeleVisitCall api={api} token={token} appointmentId={id} user={user} setMessage={setMessage} standalone />}</div>;
 }
 
+/** Full-screen fingerprint / face gate shown when the Android app reopens. */
+function BiometricLock({ userName, onUnlock, onSignOut }: { userName?: string; onUnlock: () => void; onSignOut: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const attempt = async () => {
+    setBusy(true); setNote("");
+    const r = await unlockWithBiometric();
+    setBusy(false);
+    if (r.ok) onUnlock();
+    else if (!r.cancelled) setNote(r.reason);
+  };
+  useEffect(() => { attempt(); }, []);
+  return <div className="biolock">
+    <div className="biolock-card">
+      <div className="biolock-icon" aria-hidden="true">{"\uD83D\uDD12"}</div>
+      <h2>MedAI Hospital is locked</h2>
+      <p className="muted">{userName ? "Welcome back, " + userName + "." : "Welcome back."} Confirm your fingerprint or face to continue.</p>
+      {note && <p className="warn" role="alert">{note}</p>}
+      <button className="primary" onClick={attempt} disabled={busy}>{busy ? "Waiting for fingerprint..." : "Unlock with fingerprint"}</button>
+      <button className="link" onClick={onSignOut}>Sign out and use password</button>
+    </div>
+  </div>;
+}
+
 function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
+  const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!localStorage.getItem("medai_token"));
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<"home" | "apply" | "more">("home");
   const [mode, setMode] = useState("login");
@@ -98,6 +125,8 @@ function MainApp() {
     try { const d = await api("/auth/password-reset/complete", { method: "POST", body: json({ email: resetEmail || email, code: code.trim(), newPassword }) }); setCode(""); setNewPassword(""); setPassword(""); if (d.token) { setToken(d.token); setStep("form"); setMessage(d.message); } else { setMessage(d.message); setStep("form"); setMode("login"); } } catch (x: any) { setMessage(x.message); }
   }
   async function requestReset() { try { const d = await api("/auth/password-reset/request", { method: "POST", body: json({ email: resetEmail || email }) }); setMessage(d.message); } catch (x: any) { setMessage(x.message); } }
+
+  if (locked) return <BiometricLock userName={user?.name} onUnlock={() => setLocked(false)} onSignOut={() => { setLocked(false); logout(); }} />;
 
   return <BannerContext.Provider value={banner}><div className="shell">
     <header><img src="/branding/medai-logo.svg" alt="MedAI Hospital" />
@@ -153,6 +182,7 @@ function MainApp() {
       {user.role === "patient" && <PatientPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "doctor" && <DoctorPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "admin" && <AdminPanel api={api} user={user} token={token} onToken={setToken} setMessage={setMessage} />}
+      {user && <CommercialPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
     </section>}
 
     <section id="services"><p className="eyebrow">CARE, CONNECTED</p><h2>Tools to support your health journey</h2><div className="grid three"><article><div className="service-icon" aria-hidden="true">▤</div><h3>Medical report hub</h3><p>Organize private reports and share them only through authorized care workflows.</p></article><article><div className="service-icon" aria-hidden="true">✚</div><h3>Doctor consultation</h3><p>Appointment requests, clinician messaging and doctor-written prescriptions.</p></article><article><div className="service-icon" aria-hidden="true">♡</div><h3>Medicine information</h3><p>Structured medicine information for review. MedAI does not independently prescribe treatment.</p></article></div></section>

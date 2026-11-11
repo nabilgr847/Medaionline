@@ -1,5 +1,6 @@
 """Run after `npx cap add android`.
  - camera / microphone / network permissions for video calls
+ - USE_BIOMETRIC permission for the fingerprint / face unlock screen
  - MedAI logo as the app icon (pre-made PNGs in apps/mobile/icons, no image library needed)
  - native file download + print bridge (apps/mobile/native/MainActivity.java.tpl)
 """
@@ -21,10 +22,14 @@ perms = [
     "android.permission.WAKE_LOCK",
     "android.permission.VIBRATE",
     "android.permission.ACCESS_NETWORK_STATE",
+    # fingerprint / face unlock for the app lock screen
+    "android.permission.USE_BIOMETRIC",
+    "android.permission.USE_FINGERPRINT",
 ]
 add = "".join(f'    <uses-permission android:name="{p}" />\n' for p in perms if p not in text)
 add += '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n'
 add += '    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n'
+add += '    <uses-feature android:name="android.hardware.fingerprint" android:required="false" />\n'
 manifest.write_text(text.replace("</manifest>", add + "</manifest>"))
 print("Manifest permissions added.")
 

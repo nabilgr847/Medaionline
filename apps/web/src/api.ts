@@ -1,7 +1,19 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 // Do not silently fall back to localhost in production: on a deployed website this
 // points to the visitor's own device and causes registration/login requests to fail.
-export const API: string = String(import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
+// The Android app is built from a static bundle, so a missing VITE_API_URL at
+// build time used to leave every screen unusable ("API URL is not configured").
+// Inside the Capacitor shell we therefore fall back to the production API.
+const NATIVE_API_FALLBACK = "https://medaionline-1.onrender.com";
+function isNativeShell(): boolean {
+  try {
+    const cap = (window as any).Capacitor;
+    if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform()) return true;
+    // Capacitor serves the bundle from https://localhost inside the app.
+    return location.hostname === "localhost" && location.protocol === "https:";
+  } catch { return false; }
+}
+export const API: string = String(import.meta.env.VITE_API_URL || (isNativeShell() ? NATIVE_API_FALLBACK : "")).trim().replace(/\/$/, "");
 function requireApiUrl() {
   if (!API) throw new Error("The MedAI API URL is not configured. Set VITE_API_URL to your deployed API URL in the web service environment, then rebuild the frontend.");
   return API;
