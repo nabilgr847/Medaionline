@@ -1,7 +1,7 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import { AdminRecovery } from "./v38";
 import { useEffect, useState } from "react";
-import { makeApi, json } from "./api";
+import { makeApi, json, API, pingServer } from "./api";
 import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
@@ -80,6 +80,8 @@ function MainApp() {
   const [token, setTokenState] = useState(localStorage.getItem("medai_token") || "");
   const [locked, setLocked] = useState(() => isNativeApp() && biometricLockEnabled() && !!localStorage.getItem("medai_token"));
   const [menuOpen, setMenuOpen] = useState(false);
+  const [diag, setDiag] = useState<{ ok: boolean; ms: number; detail: string } | null>(null);
+  const [pinging, setPinging] = useState(false);
   useEffect(() => {
     if (!menuOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
@@ -222,6 +224,13 @@ function MainApp() {
           <button type="button" className="link" onClick={() => { setStep("form"); setMessage(""); }}>Back to sign in</button>
         </form>}
         {message && <p className="notice" role="status" aria-live="polite">{message}</p>}
+        <div className="servercheck">
+          <span>Server: <code>{API ? API.replace(/^https?:\/\//, "") : "not configured in this build"}</code></span>
+          <button type="button" className="link" disabled={pinging} onClick={async () => { setPinging(true); setDiag(await pingServer()); setPinging(false); }}>
+            {pinging ? "Testing…" : "Test connection"}
+          </button>
+          {diag && <span className={diag.ok ? "ok" : "bad"}>{diag.ok ? "Reachable (" + diag.ms + " ms)" : diag.detail}</span>}
+        </div>
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
 

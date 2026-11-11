@@ -13,23 +13,80 @@ function isNativeShell(): boolean {
     return location.hostname === "localhost" && location.protocol === "https:";
   } catch { return false; }
 }
-export const API: string = String(import.meta.env.VITE_API_URL || (isNativeShell() ? NATIVE_API_FALLBACK : "")).trim().replace(/\/$/, "");
-function requireApiUrl() {
-  if (!API) throw new Error("The MedAI API URL is not configured. Set VITE_API_URL to your deployed API URL in the web service environment, then rebuild the frontend.");
+const NATIVE_OR_PROD = "https://medaionline-1.onrender.com";
+
+function isLocalDev(): boolean {
+  try {
+    const h = (window as any).location?.hostname || "";
+    return h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0";
+  } catch { return false; }
+}
+
+/**
+ * Base URL of the API.
+ *
+ * - `VITE_API_URL` always wins (set it in Render → Environment, then rebuild).
+ * - A build that forgot the variable used to break every screen with a misleading
+ *   "Network error", so a deployed build now falls back to production instead.
+ * - Plain local development keeps requiring the variable, so dev never silently
+ *   talks to the live server.
+ */
+export const API: string = (() => {
+  const fromEnv = String((import.meta.env as any).VITE_API_URL || "").trim().replace(/\/$/, "");
+  if (fromEnv) return fromEnv;
+  if (isNativeShell()) return NATIVE_OR_PROD;
+  if (isLocalDev()) return "";
+  return NATIVE_OR_PROD;
+})();
+
+export const API_CONFIG_ERROR = "This build has no API address. Rebuild the site with VITE_API_URL set to the API URL.";
+
+/** Called before any request so a configuration problem is reported as itself. */
+function apiBase(): string {
+  if (!API) throw new Error(API_CONFIG_ERROR);
   return API;
+}
+
+/** Health check used by the on-screen diagnostics. */
+export async function pingServer(): Promise<{ ok: boolean; ms: number; detail: string }> {
+  const started = Date.now();
+  if (!API) return { ok: false, ms: 0, detail: API_CONFIG_ERROR };
+  try {
+    const r = await fetch(API + "/api/health", { cache: "no-store" });
+    const body = await r.text();
+    let service = "";
+    try { service = JSON.parse(body)?.service || ""; } catch { /* not json */ }
+    return { ok: r.ok, ms: Date.now() - started, detail: r.ok ? (service || "API responded") : "Server answered " + r.status };
+  } catch (e: any) {
+    return { ok: false, ms: Date.now() - started, detail: "Cannot reach " + API.replace(/^https?:\/\//, "") + " — " + (e?.message || "request blocked") };
+  }
 }
 export type Api = (path: string, opts?: any) => Promise<any>;
 
 export function makeApi(token: string): Api {
   return async (path, opts = {}) => {
-    let r: Response;
-    try {
-      r = await fetch(requireApiUrl() + "/api" + path, {
-        ...opts,
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
-      });
-    } catch {
-      throw new Error("Network error. Check your connection and try again.");
+    const base = apiBase();                 // config errors must not look like network errors
+    const init = {
+      ...opts,
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
+    };
+    const method = String((opts as any).method || "GET").toUpperCase();
+    let r: Response | null = null;
+    let lastError: any = null;
+    // A sleeping Render instance can fail the first call; GETs are safe to retry once.
+    for (let attempt = 0; attempt < (method === "GET" ? 2 : 1); attempt++) {
+      try {
+        r = await fetch(base + "/api" + path, init);
+        break;
+      } catch (e) {
+        lastError = e;
+        if (attempt === 0 && method === "GET") await new Promise((res) => setTimeout(res, 1200));
+      }
+    }
+    if (!r) {
+      const err: any = new Error("Cannot reach the MedAI server (" + base.replace(/^https?:\/\//, "") + "). If the site has been idle it can take up to a minute to wake up — please try again.");
+      err.network = true; err.cause = lastError;
+      throw err;
     }
     const text = await r.text();
     let d: any = {};
@@ -48,7 +105,7 @@ export const json = (body: any) => JSON.stringify(body);
 export async function postForm(path: string, form: FormData, token = ""): Promise<any> {
   let r: Response;
   try {
-    r = await fetch(requireApiUrl() + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+    r = await fetch(apiBase() + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
   } catch {
     throw new Error("Network error while uploading. Check your connection.");
   }
@@ -63,7 +120,7 @@ export async function postForm(path: string, form: FormData, token = ""): Promis
 
 // Private files need the Authorization header, so fetch as a blob and save it.
 export async function downloadFile(token: string, id: string, name: string): Promise<void> {
-  const r = await fetch(`${requireApiUrl()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await fetch(`${apiBase()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error("Could not download the file");
   const blob = await r.blob();
   // Android app (APK): WebView cannot save blob downloads, so hand the file to the native side.
@@ -129,7 +186,7 @@ export function parseCsv(text: string): Record<string, string>[] {
 
 // Private image/file as a temporary blob URL (for inline previews). Caller must URL.revokeObjectURL it.
 export async function fetchFileUrl(token: string, id: string): Promise<string> {
-  const r = await fetch(`${requireApiUrl()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await fetch(`${apiBase()}/api/files/${id}/download`, { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error("Could not load the file");
   return URL.createObjectURL(await r.blob());
 }
