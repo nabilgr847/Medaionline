@@ -318,6 +318,14 @@ img.banner{
 
 /* Notification list used by the bell panel */
 .notelist{ display:flex; flex-direction:column; gap:8px; }
+.note{
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px; border:1px solid var(--line); border-radius:12px;
+  background:#fff; cursor:default; min-width:0;
+}
+.note.unread{ background:var(--brand-soft); border-color:#cfe0fb; cursor:pointer; }
+.note > .notebody{ flex:1 1 auto; min-width:0; }
+.note > .notemeta{ flex:0 0 auto; display:flex; align-items:center; gap:6px; }
 .notehead{ display:flex; align-items:center; gap:8px; }
 .noteico{ width:30px; height:30px; flex:0 0 30px; border-radius:50%; display:grid; place-items:center; background:var(--brand-soft); color:var(--brand); font-size:14px; }
 .notemeta{ font-size:11.5px; color:var(--muted); }
@@ -438,3 +446,73 @@ img.banner{
 .servercheck .link{ font-size:12px; min-height:0; }
 .servercheck .ok{ color:var(--ok); font-weight:600; }
 .servercheck .bad{ color:var(--danger); font-weight:600; }
+.servercheck .warn{ color:var(--warn); font-weight:600; }
+
+/* ==========================================================================
+   Missing pieces restored (AI chat findings, chat history items, call status,
+   review status chip, conversation items). Tokens come from style.css.
+   ========================================================================== */
+.chatapp{ display:flex; flex-direction:column; gap:10px; }
+.chatapp.histopen .chathist{ display:block; }
+
+.histitem{ display:flex; align-items:center; gap:6px; border-radius:10px; border:1px solid var(--line); background:#fff; padding:2px; }
+.histitem.on{ border-color:var(--brand); background:var(--brand-soft); }
+.histitem .histbtn{ border:0; background:transparent; min-height:38px; box-shadow:none; }
+.histitem.on .histbtn{ background:transparent; }
+
+.fsum{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0 8px; }
+.fpill,
+.fstat{
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:10.5px; font-weight:700; letter-spacing:.02em; text-transform:uppercase;
+  padding:2px 8px; border-radius:var(--radius-pill);
+  border:1px solid var(--line); background:var(--soft); color:var(--muted);
+}
+.fpill b{ font-size:11px; text-transform:none; letter-spacing:0; color:var(--ink); }
+.fpill.high, .fstat.high{ background:var(--danger-soft); border-color:#fecaca; color:var(--danger); }
+.fpill.low, .fstat.low{ background:var(--brand-soft); border-color:#cfe0fb; color:var(--brand); }
+.fpill.normal, .fstat.normal{ background:var(--ok-soft); border-color:#bbf7d0; color:var(--ok); }
+.fpill.unclear, .fstat.unclear{ background:var(--warn-soft); border-color:#fde68a; color:var(--warn); }
+
+.frow{
+  display:flex; align-items:center; gap:8px; width:100%; text-align:left;
+  padding:9px 11px; margin-bottom:6px;
+  background:#fff; border:1px solid var(--line); border-left:4px solid var(--line);
+  border-radius:var(--radius-sm); font:inherit; cursor:pointer;
+}
+.frow:hover{ background:var(--soft); }
+.frow.high{ border-left-color:var(--danger); }
+.frow.low{ border-left-color:var(--brand); }
+.frow.normal{ border-left-color:var(--ok); }
+.frow.unclear{ border-left-color:var(--warn); }
+.frow .fname{ flex:1 1 auto; min-width:0; font-size:13px; font-weight:600; color:var(--ink); }
+.frow .fval{ flex:0 0 auto; font-size:12.5px; color:var(--muted); }
+
+.callstatus{
+  display:inline-flex; align-items:center; gap:6px;
+  font-size:12px; font-weight:600; color:var(--muted);
+  padding:3px 10px; border-radius:var(--radius-pill);
+  background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.22);
+}
+.callstatus.on{ color:#d1fae5; background:rgba(5,150,105,.28); border-color:rgba(5,150,105,.45); }
+
+.statuschip{
+  display:inline-flex; align-items:center; gap:4px;
+  font-size:11px; font-weight:700; text-transform:capitalize;
+  padding:2px 9px; border-radius:var(--radius-pill);
+  border:1px solid var(--line); background:var(--soft); color:var(--muted);
+  white-space:nowrap;
+}
+.statuschip.ok{ background:var(--ok-soft); border-color:#bbf7d0; color:var(--ok); }
+.statuschip.warn{ background:var(--warn-soft); border-color:#fde68a; color:var(--warn); }
+.statuschip.bad{ background:var(--danger-soft); border-color:#fecaca; color:var(--danger); }
+
+.convitem{ width:100%; justify-content:flex-start; text-align:left; }
+.convitem.on{ border-color:var(--brand); background:var(--brand-soft); }
+.convitem small{ color:var(--muted); font-size:11.5px; display:block; }
+
+@media (max-width:520px){
+  .frow{ flex-wrap:wrap; }
+  .frow .fval{ flex:1 1 100%; }
+  .histitem .histbtn{ font-size:12.5px; }
+}

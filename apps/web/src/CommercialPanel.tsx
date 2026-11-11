@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { makeApi, json, fmtDate, fmtSize, API } from "./api";
 import { Tabs } from "./common";
 import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled } from "./biometric";
+import { pingServer, setApiBase, clearApiBase } from "./api";
 
 type Role = "patient" | "doctor" | "admin";
 
@@ -66,9 +67,11 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
   const [bioAvail, setBioAvail] = useState<{ available: boolean; type: string; reason?: string } | null>(null);
   const [bioEnabled, setBioEnabled] = useState(biometricLockEnabled());
   const [busy, setBusy] = useState(false);
-  const [pingBusy, setPingBusy] = useState(false);
-  const [pingOk, setPingOk] = useState<boolean | null>(null);
-  const [pingNote, setPingNote] = useState("");
+  const [connBusy, setConnBusy] = useState(false);
+  const [connOk, setConnOk] = useState<boolean | null>(null);
+  const [connNote, setConnNote] = useState("");
+  const [connBase, setConnBase] = useState(API);
+  const [connInput, setConnInput] = useState("");
   useEffect(() => {
     let alive = true;
     checkBiometrics().then((c) => {
@@ -602,26 +605,42 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
           </div>
 
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 18, background: "#fff", marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ minWidth: 200 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Connection</div>
-                <div style={{ fontSize: 12.5, color: "#64748b", wordBreak: "break-all" }}>{API || "No API URL configured in this build"}</div>
-                {pingNote && <div style={{ fontSize: 12.5, marginTop: 4, color: pingOk === true ? "#059669" : pingOk === false ? "#dc2626" : "#64748b" }}>{pingNote}</div>}
-              </div>
-              <button className="outline" disabled={pingBusy} onClick={async () => {
-                setPingBusy(true); setPingNote("");
-                const started = Date.now();
-                try {
-                  const r = await fetch((API || "") + "/api/health", { cache: "no-store" });
-                  const d = await r.json().catch(() => ({}));
-                  setPingOk(r.ok);
-                  setPingNote(r.ok ? "Server reachable (" + (Date.now() - started) + " ms) · " + (d.service || "API") : "Server answered " + r.status);
-                } catch (e: any) {
-                  setPingOk(false);
-                  setPingNote("Cannot reach the server from this device. Check the connection or the API URL.");
-                } finally { setPingBusy(false); }
-              }}>{pingBusy ? "Testing…" : "Test connection"}</button>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Server connection</div>
+            <div style={{ fontSize: 12.5, color: "#64748b", wordBreak: "break-all", marginBottom: 10 }}>
+              {connBase ? connBase.replace(/^https?:\/\//, "") : (API ? API.replace(/^https?:\/\//, "") : "detecting…")}
             </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="outline" disabled={connBusy} onClick={async () => {
+                setConnBusy(true); setConnNote("");
+                const r = await pingServer();
+                setConnBase(r.base);
+                setConnOk(r.ok);
+                setConnNote(r.detail);
+                setConnBusy(false);
+              }}>{connBusy ? "Testing…" : "Test connection"}</button>
+              <span style={{ fontSize: 12.5, color: connOk === null ? "#64748b" : connOk ? "#059669" : "#dc2626", fontWeight: 600 }}>{connNote}</span>
+            </div>
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ cursor: "pointer", fontSize: 12.5, color: "#475569", fontWeight: 600 }}>Advanced: set the server address by hand</summary>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                <input value={connInput} onChange={(e) => setConnInput(e.target.value)} placeholder="https://your-api.onrender.com" style={{ flex: 1, minWidth: 200 }} />
+                <button className="primary" onClick={async () => {
+                  const r = setApiBase(connInput);
+                  setConnNote(r.message);
+                  if (!r.ok) return;
+                  const p = await pingServer();
+                  setConnBase(p.base); setConnOk(p.ok); setConnNote(r.message + " · " + p.detail);
+                }}>Save</button>
+                <button className="outline" onClick={async () => {
+                  clearApiBase(); setConnInput("");
+                  const p = await pingServer();
+                  setConnBase(p.base); setConnOk(p.ok); setConnNote("Automatic · " + p.detail);
+                }}>Automatic</button>
+              </div>
+              <p style={{ fontSize: 11.5, color: "#94a3b8", margin: "8px 0 0" }}>
+                The app normally finds the server itself. Use this only if the address changed.
+              </p>
+            </details>
           </div>
 
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 18, background: "#f8fafc" }}>

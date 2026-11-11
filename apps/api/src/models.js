@@ -27,7 +27,6 @@ const userSchema = new Schema({
 }, {timestamps:true});
 userSchema.index({role:1,status:1,createdAt:-1});
 userSchema.index({name:1});
-userSchema.index({email:1});
 userSchema.index({phone:1});
 
 const fileSchema = new Schema({
@@ -130,7 +129,7 @@ const prescriptionSchema = new Schema({
   items:[{brand:String,generic:{type:String,required:true},strength:String,form:String,dose:{type:String,required:true},frequency:{type:String,required:true},duration:{type:String,required:true},instructions:String,medicineId:{type:Schema.Types.ObjectId,ref:"Medicine"}}],
   notes:String, advisedTests:String, clinical:{complaints:String,history:String,examination:String,vitals:String,diagnosis:String,pastTests:String,advice:String,followUp:String}, signedAt:Date, signatureHash:String, signatureAlgorithm:String, signatureValue:String, publicKeyFingerprint:String, signerName:String, signerBmdc:String, voidReason:String,
   // V3.8.3: secret access code — only admin/doctor can see
-  secretAccessCode:{type:String,index:true,sparse:true}
+  secretAccessCode:{type:String}
 },{timestamps:true});
 prescriptionSchema.index({appointmentId:1,createdAt:-1});
 prescriptionSchema.index({secretAccessCode:1},{unique:true,sparse:true});
@@ -165,7 +164,7 @@ const medicalReportSchema = new Schema({
   extractedText:String, analysisMode:{type:String,enum:["pdf_text_ocr","image_vision_ocr"]}, findings:[{name:String,value:String,unit:String,normalRange:String,status:String,check:String,key:String,rangeUsed:String,rangeSource:String,conflict:String,deviation:Number,measures:String,meaning:String,source:String,url:String}], urgencyLevel:String, aiExplanation:String, aiPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, finalPdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"},
   reviewComment:String, doctorExplanation:String, advisedTests:String, rejectionReason:String, reviewedAt:Date, signedAt:Date, signatureImageFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile"}, signatureImageHash:String, deliveredAt:Date,
   // V3.8.3: secret access code — only admin/doctor can see & use; patient never receives it
-  secretAccessCode:{type:String,index:true,sparse:true},
+  secretAccessCode:{type:String},
   simpleSummary:{type:String,default:""} // patient-friendly short summary (Bangla/English)
 },{timestamps:true});
 medicalReportSchema.index({doctorId:1,status:1,createdAt:-1});
