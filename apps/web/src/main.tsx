@@ -3,6 +3,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./style.css";
+import "./components.css";
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err: Error | null }> {
   state = { err: null as Error | null };

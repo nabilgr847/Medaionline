@@ -3,6 +3,7 @@
 // pharmacy & lab orders. Accessible to all roles; admin sees overview.
 import { useState, useEffect, useCallback } from "react";
 import { makeApi, json, fmtDate, fmtSize, API } from "./api";
+import { Tabs } from "./common";
 import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled } from "./biometric";
 
 type Role = "patient" | "doctor" | "admin";
@@ -175,56 +176,48 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
 
   // ---------- Render helpers ----------
   const statusBadge = (s: string) => {
-    const color = { pending: "#b26a00", paid: "#17805f", failed: "#b3261e", cancelled: "#60788d", active: "#17805f", expired: "#b3261e", past_due: "#b26a00", sent: "#087fbd", draft: "#60788d", overdue: "#b3261e" }[s] || "#60788d";
+    const color = { pending: "#b26a00", paid: "#059669", failed: "#dc2626", cancelled: "#64748b", active: "#059669", expired: "#dc2626", past_due: "#b26a00", sent: "#0b5ed6", draft: "#64748b", overdue: "#dc2626" }[s] || "#64748b";
     const badgeBorder = "1px solid " + color + "40";
     return <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, background: color + "15", color, border: badgeBorder, textTransform: "capitalize" }}>{s}</span>;
   };
 
+  const tabItems: Array<[string, string]> = [
+    ["plans", "Plans"],
+    ["subscription", "My subscription"],
+    ["payments", "Payments"],
+    ["invoices", "Invoices"],
+    ["2fa", "Two-factor auth"],
+    ["export", "Data export"],
+    ["pharmacy", "Pharmacy"],
+    ["lab", "Lab orders"],
+    ["medicine", "Medicine tracker"],
+    ["security", "Security & biometric"],
+  ];
+  if (user.role === "admin") tabItems.push(["overview", "Admin overview"]);
+
   return (
     <div className="commercial-panel" style={{ maxWidth: 900, margin: "0 auto", padding: "0 12px 40px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0, fontSize: 20, color: "#102e49" }}>💳 Billing &amp; Services</h2>
-        <span style={{ fontSize: 12, color: "#60788d" }}>{user.name} • {user.email}</span>
+        <h2 style={{ margin: 0, fontSize: 20, color: "#0f172a", fontFamily: "var(--font-display)", letterSpacing: "-.01em" }}>💳 Billing &amp; Services</h2>
+        <span style={{ fontSize: 12, color: "#64748b" }}>{user.name} • {user.email}</span>
       </div>
 
-      {err && <div style={{ background: "#fdf0ee", color: "#b3261e", padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div style={{ background: "#eaf7f1", color: "#17805f", padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {err && <div style={{ background: "#fdf0ee", color: "#dc2626", padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div style={{ background: "#eaf7f1", color: "#059669", padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 18, overflowX: "auto", borderBottom: "1px solid #dce8ef", paddingBottom: 8 }}>
-        {(function(){
-          const items: Array<[string,string]> = [
-            ["plans","Plans"],["subscription","My Subscription"],["payments","Payments"],
-            ["invoices","Invoices"],["2fa","Two-Factor Auth"],["export","Data Export"],
-            ["pharmacy","Pharmacy"],["lab","Lab Orders"]
-          ];
-          if(user.role === "admin") items.push(["overview","Admin Overview"]);
-          items.push(["medicine","Medicine Tracker"],["security","Security & Biometric"]);
-          return items.map(([k,label])=>{
-            const active = tab === k;
-            const btnBorder = active ? "1px solid #087fbd" : "1px solid #dce8ef";
-            return (
-              <button key={k} onClick={() => setTab(k as any)} style={{
-                padding: "6px 12px", fontSize: 13, border: btnBorder, borderRadius: 6,
-                background: active ? "#087fbd" : "#fff", color: active ? "#fff" : "#334155",
-                cursor: "pointer"
-              }}>{label}</button>
-            );
-          });
-        })()}
-      </div>
+      <Tabs tabs={tabItems} tab={tab} setTab={(t) => setTab(t as any)} />
 
-      {loading && <div style={{ textAlign: "center", padding: 30, color: "#60788d" }}>Loading…</div>}
+      {loading && <div style={{ textAlign: "center", padding: 30, color: "#64748b" }}>Loading…</div>}
 
       {/* ---------- PLANS ---------- */}
       {tab === "plans" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Choose a plan</h3>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Choose a plan</h3>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {plans.map((plan) => (
-              <div key={plan._id} style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, minWidth: 220, background: "#fff" }}>
-                <div style={{ fontWeight: "bold", fontSize: 16, color: "#102e49" }}>{plan.name}</div>
-                <div style={{ fontSize: 13, color: "#60788d", margin: "4px 0" }}>{plan.description || ""}</div>
+              <div key={plan._id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, minWidth: 220, background: "#fff" }}>
+                <div style={{ fontWeight: "bold", fontSize: 16, color: "#0f172a" }}>{plan.name}</div>
+                <div style={{ fontSize: 13, color: "#64748b", margin: "4px 0" }}>{plan.description || ""}</div>
                 <div style={{ fontSize: 22, fontWeight: "bold", margin: "8px 0" }}>
                   {plan.currency === "BDT" ? "৳" : "$"}{plan.priceMonthly === 0 && plan.priceYearly === 0 ? "Free" : plan.priceMonthly}
                   {plan.priceYearly > 0 && plan.priceYearly !== plan.priceMonthly ? ` / yr ৳${plan.priceYearly}` : ""}
@@ -238,19 +231,19 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 </ul>
                 <div style={{ marginTop: 12 }}>
                   {subscription?.status === "active" ? (
-                    <button style={{ width: "100%", padding: 8, border: "none", borderRadius: 6, background: "#60788d", color: "#fff", cursor: "not-allowed" }}>Already subscribed</button>
+                    <button style={{ width: "100%", padding: 8, border: "none", borderRadius: 6, background: "#64748b", color: "#fff", cursor: "not-allowed" }}>Already subscribed</button>
                   ) : (
                     <>
-                      <button onClick={() => subscribe(plan._id, "monthly")} style={{ width: "48%", padding: 8, border: "1px solid #087fbd", borderRadius: 6, background: "#fff", color: "#087fbd", cursor: "pointer" }}>Monthly</button>
+                      <button onClick={() => subscribe(plan._id, "monthly")} style={{ width: "48%", padding: 8, border: "1px solid #0b5ed6", borderRadius: 6, background: "#fff", color: "#0b5ed6", cursor: "pointer" }}>Monthly</button>
                       {plan.priceYearly > 0 && (
-                        <button onClick={() => subscribe(plan._id, "yearly")} style={{ width: "48%", padding: 8, border: "none", borderRadius: 6, background: "#087fbd", color: "#fff", cursor: "pointer", marginLeft: "4%" }}>Yearly</button>
+                        <button onClick={() => subscribe(plan._id, "yearly")} style={{ width: "48%", padding: 8, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer", marginLeft: "4%" }}>Yearly</button>
                       )}
                     </>
                   )}
                 </div>
               </div>
             ))}
-            {plans.length === 0 && <div style={{ color: "#60788d" }}>No plans available.</div>}
+            {plans.length === 0 && <div style={{ color: "#64748b" }}>No plans available.</div>}
           </div>
         </div>
       )}
@@ -258,18 +251,18 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- SUBSCRIPTION ---------- */}
       {tab === "subscription" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>My subscription</h3>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>My subscription</h3>
           {subscription ? (
-            <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <div style={{ fontWeight: "bold" }}>{subscription.planId?.name || "Plan"}</div>{statusBadge(subscription.status)}
               </div>
-              <div style={{ fontSize: 13, color: "#60788d", marginBottom: 8 }}>Started: {fmtDate(subscription.startedAt)}</div>
-              {subscription.expiresAt && <div style={{ fontSize: 13, color: "#60788d", marginBottom: 12 }}>Expires: {fmtDate(subscription.expiresAt)}</div>}
-              <div style={{ fontSize: 13, color: "#60788d" }}>Auto-renew: {subscription.autoRenew ? "On" : "Off"}</div>
+              <div style={{ fontSize: 13, color: "#64748b", marginBottom: 8 }}>Started: {fmtDate(subscription.startedAt)}</div>
+              {subscription.expiresAt && <div style={{ fontSize: 13, color: "#64748b", marginBottom: 12 }}>Expires: {fmtDate(subscription.expiresAt)}</div>}
+              <div style={{ fontSize: 13, color: "#64748b" }}>Auto-renew: {subscription.autoRenew ? "On" : "Off"}</div>
             </div>
           ) : (
-            <div style={{ color: "#60788d" }}>No active subscription. Choose a plan above.</div>
+            <div style={{ color: "#64748b" }}>No active subscription. Choose a plan above.</div>
           )}
         </div>
       )}
@@ -277,25 +270,25 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- PAYMENTS ---------- */}
       {tab === "payments" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Make a payment</h3>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "#60788d", marginBottom: 10 }}>Record a payment (manual gateway — admin confirms)</div>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Make a payment</h3>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>Record a payment (manual gateway — admin confirms)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 90px", gap: 8, alignItems: "end" }}>
-              <select defaultValue="manual" onChange={(e) => setForm({...form, gateway: e.target.value})} style={{ padding: 8, border: "1px solid #dce8ef", borderRadius: 6 }}>
+              <select defaultValue="manual" onChange={(e) => setForm({...form, gateway: e.target.value})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6 }}>
                 <option value="manual">Manual / Cash</option>
                 <option value="bkash">bKash</option>
                 <option value="nagad">Nagad</option>
                 <option value="stripe">Stripe (card)</option>
               </select>
-              <input type="number" defaultValue="0" step="10" onChange={(e) => setForm({...form, amount: Number(e.target.value) || 0})} style={{ padding: 8, border: "1px solid #dce8ef", borderRadius: 6 }} placeholder="Amount (BDT)" />
-              <input type="text" defaultValue="consultation" onChange={(e) => setForm({...form, purpose: e.target.value})} style={{ padding: 8, border: "1px solid #dce8ef", borderRadius: 6 }} placeholder="Purpose" />
-              <button onClick={() => pay(form.gateway || "manual", form.amount || 0, form.purpose || "consultation")} style={{ padding: 8, border: "none", borderRadius: 6, background: "#087fbd", color: "#fff", cursor: "pointer" }}>Record</button>
+              <input type="number" defaultValue="0" step="10" onChange={(e) => setForm({...form, amount: Number(e.target.value) || 0})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6 }} placeholder="Amount (BDT)" />
+              <input type="text" defaultValue="consultation" onChange={(e) => setForm({...form, purpose: e.target.value})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6 }} placeholder="Purpose" />
+              <button onClick={() => pay(form.gateway || "manual", form.amount || 0, form.purpose || "consultation")} style={{ padding: 8, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer" }}>Record</button>
             </div>
           </div>
-          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#102e49" }}>Payment history</h4>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr style={{ background: "#f4f8fb" }}>
+          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#0f172a" }}>Payment history</h4>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+            <div className="tablewrap"><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr style={{ background: "#f8fafc" }}>
                 <th style={{ textAlign: "left", padding: 8 }}>Gateway</th><th style={{ textAlign: "left", padding: 8 }}>Amount</th><th style={{ textAlign: "left", padding: 8 }}>Purpose</th><th style={{ textAlign: "left", padding: 8 }}>Status</th><th style={{ textAlign: "left", padding: 8 }}>Date</th>
               </tr></thead>
               <tbody>
@@ -308,9 +301,9 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                     <td style={{ padding: 8 }}>{fmtDate(p.createdAt)}</td>
                   </tr>
                 ))}
-                {payments.length === 0 && <tr><td style={{ padding: 16, textAlign: "center", color: "#60788d" }} colSpan={5}>No payments yet.</td></tr>}
+                {payments.length === 0 && <tr><td style={{ padding: 16, textAlign: "center", color: "#64748b" }} colSpan={5}>No payments yet.</td></tr>}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </div>
       )}
@@ -318,10 +311,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- INVOICES ---------- */}
       {tab === "invoices" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Invoices</h3>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr style={{ background: "#f4f8fb" }}>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Invoices</h3>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+            <div className="tablewrap"><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr style={{ background: "#f8fafc" }}>
                 <th style={{ textAlign: "left", padding: 8 }}>Invoice #</th><th style={{ textAlign: "left", padding: 8 }}>Total</th><th style={{ textAlign: "left", padding: 8 }}>Status</th><th style={{ textAlign: "left", padding: 8 }}>Issued</th><th style={{ textAlign: "left", padding: 8 }}>PDF</th>
               </tr></thead>
               <tbody>
@@ -333,14 +326,14 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                     <td style={{ padding: 8 }}>{fmtDate(inv.issuedAt)}</td>
                     <td style={{ padding: 8 }}>
                       {inv.pdfFileId ? (
-                        <button onClick={() => window.open(`${window.location.origin}/api/files/${inv.pdfFileId}/download`, "_blank")} style={{ padding: "4px 8px", border: "1px solid #087fbd", borderRadius: 4, background: "#fff", color: "#087fbd", fontSize: 12, cursor: "pointer" }}>Download</button>
-                      ) : <span style={{ fontSize: 11, color: "#60788d" }}>—</span>}
+                        <button onClick={() => window.open(`${window.location.origin}/api/files/${inv.pdfFileId}/download`, "_blank")} style={{ padding: "4px 8px", border: "1px solid #0b5ed6", borderRadius: 4, background: "#fff", color: "#0b5ed6", fontSize: 12, cursor: "pointer" }}>Download</button>
+                      ) : <span style={{ fontSize: 11, color: "#64748b" }}>—</span>}
                     </td>
                   </tr>
                 ))}
-                {invoices.length === 0 && <tr><td style={{ padding: 16, textAlign: "center", color: "#60788d" }} colSpan={5}>No invoices yet.</td></tr>}
+                {invoices.length === 0 && <tr><td style={{ padding: 16, textAlign: "center", color: "#64748b" }} colSpan={5}>No invoices yet.</td></tr>}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </div>
       )}
@@ -348,18 +341,18 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- 2FA ---------- */}
       {tab === "2fa" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Two-Factor Authentication</h3>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Two-Factor Authentication</h3>
           {tfa?.enabled ? (
-            <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <span style={{ fontWeight: "bold" }}>2FA is active</span>{statusBadge("active")}
               </div>
-              <div style={{ fontSize: 13, color: "#60788d" }}>Verified: {fmtDate(tfa.verifiedAt || "")}</div>
-              <button onClick={disable2fa} style={{ marginTop: 12, padding: 8, border: "1px solid #b3261e", borderRadius: 6, background: "#fff", color: "#b3261e", cursor: "pointer" }}>Disable 2FA</button>
+              <div style={{ fontSize: 13, color: "#64748b" }}>Verified: {fmtDate(tfa.verifiedAt || "")}</div>
+              <button onClick={disable2fa} style={{ marginTop: 12, padding: 8, border: "1px solid #dc2626", borderRadius: 6, background: "#fff", color: "#dc2626", cursor: "pointer" }}>Disable 2FA</button>
             </div>
           ) : (
-            <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
-              <div style={{ fontSize: 13, color: "#60788d", marginBottom: 10 }}>Set up an authenticator app (Google Authenticator, Authy, etc.)</div>
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
+              <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>Set up an authenticator app (Google Authenticator, Authy, etc.)</div>
               {form.step === "verify" && (
                 <div style={{ marginTop: 12, padding: 12, background: "#fff6e0", borderRadius: 8, fontSize: 12 }}>
                   <div style={{ fontWeight: "bold", marginBottom: 6 }}>Secret key: <span style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{form.secret}</span></div>
@@ -371,13 +364,13 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                     <strong>Backup codes (save these):</strong> {form.backupCodes.map((c: string, i: number) => <span key={i} style={{ marginRight: 8, fontFamily: "monospace", background: "#eee", padding: "2px 6px", borderRadius: 4 }}>{c}</span>)}
                   </div>
                   <div style={{ marginTop: 10 }}>
-                    <input type="text" maxLength={6} onChange={(e) => setForm({...form, code: e.target.value})} style={{ padding: 8, border: "1px solid #dce8ef", borderRadius: 6, width: 100 }} placeholder="6-digit code" />
-                    <button onClick={() => verify2fa(form.code || "")} style={{ marginLeft: 8, padding: 8, border: "none", borderRadius: 6, background: "#087fbd", color: "#fff", cursor: "pointer" }}>Verify &amp; enable</button>
+                    <input type="text" maxLength={6} onChange={(e) => setForm({...form, code: e.target.value})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, width: 100 }} placeholder="6-digit code" />
+                    <button onClick={() => verify2fa(form.code || "")} style={{ marginLeft: 8, padding: 8, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer" }}>Verify &amp; enable</button>
                   </div>
                 </div>
               )}
               {form.step !== "verify" && (
-                <button onClick={setup2fa} style={{ padding: 10, border: "none", borderRadius: 6, background: "#087fbd", color: "#fff", cursor: "pointer", width: "100%" }}>Set up 2FA</button>
+                <button onClick={setup2fa} style={{ padding: 10, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer", width: "100%" }}>Set up 2FA</button>
               )}
             </div>
           )}
@@ -387,12 +380,12 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- DATA EXPORT ---------- */}
       {tab === "export" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Export my data</h3>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
-            <div style={{ fontSize: 13, color: "#60788d", marginBottom: 10 }}>Request a copy of all your personal data (reports, prescriptions, appointments, files). Prepared as a downloadable archive.</div>
-            <button onClick={requestExport} style={{ padding: 10, border: "none", borderRadius: 6, background: "#087fbd", color: "#fff", cursor: "pointer", width: "100%" }}>Request data export</button>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Export my data</h3>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ fontSize: 13, color: "#64748b", marginBottom: 10 }}>Request a copy of all your personal data (reports, prescriptions, appointments, files). Prepared as a downloadable archive.</div>
+            <button onClick={requestExport} style={{ padding: 10, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer", width: "100%" }}>Request data export</button>
             {exportStatus && (
-              <div style={{ marginTop: 12, fontSize: 13, color: "#60788d" }}>
+              <div style={{ marginTop: 12, fontSize: 13, color: "#64748b" }}>
                 Status: <strong>{exportStatus.status}</strong>{exportStatus.downloadUrl ? ` • <a href={exportStatus.downloadUrl} target="_blank" rel="noopener">Download</a>` : ""}
               </div>
             )}
@@ -403,10 +396,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- PHARMACY ---------- */}
       {tab === "pharmacy" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Pharmacy orders</h3>
-          <div style={{ color: "#60788d", fontSize: 13, marginBottom: 10 }}>Order medicines from a signed prescription. (Pharmacy integration coming soon — placeholder UI.)</div>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
-            <div style={{ fontSize: 13, color: "#60788d" }}>No pharmacy orders yet.</div>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Pharmacy orders</h3>
+          <div style={{ color: "#64748b", fontSize: 13, marginBottom: 10 }}>Order medicines from a signed prescription. (Pharmacy integration coming soon — placeholder UI.)</div>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>No pharmacy orders yet.</div>
           </div>
         </div>
       )}
@@ -414,10 +407,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- LAB ---------- */}
       {tab === "lab" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Lab test orders</h3>
-          <div style={{ color: "#60788d", fontSize: 13, marginBottom: 10 }}>Book lab tests and receive results online. (Lab integration coming soon — placeholder UI.)</div>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
-            <div style={{ fontSize: 13, color: "#60788d" }}>No lab orders yet.</div>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Lab test orders</h3>
+          <div style={{ color: "#64748b", fontSize: 13, marginBottom: 10 }}>Book lab tests and receive results online. (Lab integration coming soon — placeholder UI.)</div>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>No lab orders yet.</div>
           </div>
         </div>
       )}
@@ -427,12 +420,12 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
         <div>
           <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10 }}>
             <div>
-              <h3 style={{ fontSize: 16, marginBottom: 4, color: "#102e49" }}>💊 Medicine Tracker</h3>
-              <div style={{ fontSize: 13, color: "#60788d" }}>Set reminders and log when you take your medicines.</div>
+              <h3 style={{ fontSize: 16, marginBottom: 4, color: "#0f172a" }}>💊 Medicine Tracker</h3>
+              <div style={{ fontSize: 13, color: "#64748b" }}>Set reminders and log when you take your medicines.</div>
             </div>
             {adherence && (
               <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize: 13, color: "#60788d" }}>Adherence</div>
+                <div style={{ fontSize: 13, color: "#64748b" }}>Adherence</div>
                 <div style={{ fontSize: 28, fontWeight: 800, color: adherence.adherence >= 80 ? "#059669" : adherence.adherence >= 50 ? "#d97706" : "#dc2626" }}>
                   {adherence.adherence}%
                 </div>
@@ -441,8 +434,8 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
           </div>
 
           {/* Add reminder form */}
-          <div style={{ border:"1px solid #dce8ef",borderRadius:16,padding:16,background:"#fff",marginBottom:16,boxShadow:"var(--shadow-sm)" }}>
-            <h4 style={{ fontSize:14, marginBottom:10, color:"#102e49", marginTop:0 }}>Add new reminder</h4>
+          <div style={{ border:"1px solid #e2e8f0",borderRadius:16,padding:16,background:"#fff",marginBottom:16,boxShadow:"var(--shadow-sm)" }}>
+            <h4 style={{ fontSize:14, marginBottom:10, color:"#0f172a", marginTop:0 }}>Add new reminder</h4>
             <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,alignItems:"end" }}>
               <input value={newMed.medicineName} onChange={e=>setNewMed({...newMed,medicineName:e.target.value})} placeholder="Medicine name" />
               <input value={newMed.genericName} onChange={e=>setNewMed({...newMed,genericName:e.target.value})} placeholder="Generic (optional)" />
@@ -464,14 +457,14 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
           </div>
 
           {/* Active reminders */}
-          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#102e49", marginTop: 0 }}>Active reminders</h4>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, background: "#fff", marginBottom: 20, overflow: "hidden" }}>
+          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#0f172a", marginTop: 0 }}>Active reminders</h4>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, background: "#fff", marginBottom: 20, overflow: "hidden" }}>
             {reminders.length === 0 ? (
-              <div style={{ padding: 20, color: "#60788d", textAlign: "center" }}>No reminders yet. Add one above.</div>
+              <div style={{ padding: 20, color: "#64748b", textAlign: "center" }}>No reminders yet. Add one above.</div>
             ) : reminders.map((r) => (
               <div key={r._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 160 }}>
-                  <div style={{ fontWeight: 700, color: "#102e49" }}>{r.medicineName}</div>
+                  <div style={{ fontWeight: 700, color: "#0f172a" }}>{r.medicineName}</div>
                   <div style={{ fontSize: 12, color: "#64748b" }}>
                     {[r.genericName, r.dosage].filter(Boolean).join(" · ")}
                     {r.timesOfDay.length ? (r.genericName || r.dosage ? " · " : "") + r.timesOfDay.join(", ") : ""}
@@ -525,13 +518,13 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
           </div>
 
           {/* Recent doses */}
-          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#102e49", marginTop: 0 }}>Recent doses</h4>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, background: "#fff", overflow: "hidden" }}>
+          <h4 style={{ fontSize: 14, marginBottom: 8, color: "#0f172a", marginTop: 0 }}>Recent doses</h4>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, background: "#fff", overflow: "hidden" }}>
             {intakeLogs.length === 0 ? (
-              <div style={{ padding: 20, color: "#60788d", textAlign: "center" }}>No doses logged yet.</div>
+              <div style={{ padding: 20, color: "#64748b", textAlign: "center" }}>No doses logged yet.</div>
             ) : intakeLogs.slice(0, 12).map((l) => (
               <div key={l._id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 16px", borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>
-                <span style={{ color: "#102e49", fontWeight: 600 }}>{(l as any).reminderId?.medicineName || "Medicine"}</span>
+                <span style={{ color: "#0f172a", fontWeight: 600 }}>{(l as any).reminderId?.medicineName || "Medicine"}</span>
                 <span style={{ color: l.status === "taken" ? "#059669" : l.status === "skipped" ? "#d97706" : "#dc2626", fontWeight: 600 }}>
                   {l.status} · {fmtDate(l.takenAt)}
                 </span>
@@ -544,15 +537,15 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- SECURITY & BIOMETRIC ---------- */}
       {tab === "security" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 6, color: "#102e49" }}>Security &amp; biometric login</h3>
-          <p style={{ fontSize: 13, color: "#60788d", marginTop: 0, marginBottom: 16 }}>
+          <h3 style={{ fontSize: 16, marginBottom: 6, color: "#0f172a" }}>Security &amp; biometric login</h3>
+          <p style={{ fontSize: 13, color: "#64748b", marginTop: 0, marginBottom: 16 }}>
             Skip the password when you reopen the MedAI Android app — your fingerprint or face is checked on the device itself and never leaves it.
           </p>
 
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, padding: 20, background: "#fff", boxShadow: "var(--shadow-sm)", marginBottom: 16 }}>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#fff", boxShadow: "var(--shadow-sm)", marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div style={{ minWidth: 200 }}>
-                <div style={{ fontWeight: 700, fontSize: 15, color: "#102e49" }}>Fingerprint / face unlock</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#0f172a" }}>Fingerprint / face unlock</div>
                 <div style={{ fontSize: 13, color: "#64748b" }}>
                   {!native ? "Available in the Android app only (this page is running in a browser)."
                     : bioAvail === null ? "Checking this device…"
@@ -608,10 +601,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
             )}
           </div>
 
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, padding: 18, background: "#fff", marginBottom: 16 }}>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 18, background: "#fff", marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div style={{ minWidth: 200 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#102e49", marginBottom: 4 }}>Connection</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Connection</div>
                 <div style={{ fontSize: 12.5, color: "#64748b", wordBreak: "break-all" }}>{API || "No API URL configured in this build"}</div>
                 {pingNote && <div style={{ fontSize: 12.5, marginTop: 4, color: pingOk === true ? "#059669" : pingOk === false ? "#dc2626" : "#64748b" }}>{pingNote}</div>}
               </div>
@@ -631,8 +624,8 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
             </div>
           </div>
 
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, padding: 18, background: "#f8fafc" }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#102e49", marginBottom: 8 }}>How it protects your account</div>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 18, background: "#f8fafc" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>How it protects your account</div>
             <ul style={{ margin: 0, paddingLeft: 18, color: "#64748b", fontSize: 13, lineHeight: 1.9 }}>
               <li>Your fingerprint or face is matched by Android — MedAI never receives or stores biometric data.</li>
               <li>The app only re-opens for the enrolled finger; after several failed attempts Android asks for your device PIN.</li>
@@ -647,10 +640,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
       {/* ---------- ADMIN OVERVIEW ---------- */}
       {tab === "overview" && user.role === "admin" && (
         <div>
-          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#102e49" }}>Admin — Commercial overview</h3>
-          <div style={{ color: "#60788d", fontSize: 13, marginBottom: 10 }}>Aggregate payment & subscription metrics.</div>
-          <div style={{ border: "1px solid #dce8ef", borderRadius: 10, padding: 16, background: "#fff" }}>
-            <div style={{ fontSize: 13, color: "#60788d" }}>Loading overview…</div>
+          <h3 style={{ fontSize: 16, marginBottom: 10, color: "#0f172a" }}>Admin — Commercial overview</h3>
+          <div style={{ color: "#64748b", fontSize: 13, marginBottom: 10 }}>Aggregate payment & subscription metrics.</div>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>Loading overview…</div>
           </div>
         </div>
       )}
