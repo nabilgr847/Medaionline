@@ -2,7 +2,7 @@
 // Commercial panel: subscriptions, payments, invoices, 2FA, data export,
 // pharmacy & lab orders. Accessible to all roles; admin sees overview.
 import { useState, useEffect, useCallback } from "react";
-import { makeApi, json, fmtDate, fmtSize } from "./api";
+import { makeApi, json, fmtDate, fmtSize, API } from "./api";
 import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled } from "./biometric";
 
 type Role = "patient" | "doctor" | "admin";
@@ -65,6 +65,9 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
   const [bioAvail, setBioAvail] = useState<{ available: boolean; type: string; reason?: string } | null>(null);
   const [bioEnabled, setBioEnabled] = useState(biometricLockEnabled());
   const [busy, setBusy] = useState(false);
+  const [pingBusy, setPingBusy] = useState(false);
+  const [pingOk, setPingOk] = useState<boolean | null>(null);
+  const [pingNote, setPingNote] = useState("");
   useEffect(() => {
     let alive = true;
     checkBiometrics().then((c) => {
@@ -603,6 +606,29 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 </button>
               </div>
             )}
+          </div>
+
+          <div style={{ border: "1px solid #dce8ef", borderRadius: 16, padding: 18, background: "#fff", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 200 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#102e49", marginBottom: 4 }}>Connection</div>
+                <div style={{ fontSize: 12.5, color: "#64748b", wordBreak: "break-all" }}>{API || "No API URL configured in this build"}</div>
+                {pingNote && <div style={{ fontSize: 12.5, marginTop: 4, color: pingOk === true ? "#059669" : pingOk === false ? "#dc2626" : "#64748b" }}>{pingNote}</div>}
+              </div>
+              <button className="outline" disabled={pingBusy} onClick={async () => {
+                setPingBusy(true); setPingNote("");
+                const started = Date.now();
+                try {
+                  const r = await fetch((API || "") + "/api/health", { cache: "no-store" });
+                  const d = await r.json().catch(() => ({}));
+                  setPingOk(r.ok);
+                  setPingNote(r.ok ? "Server reachable (" + (Date.now() - started) + " ms) · " + (d.service || "API") : "Server answered " + r.status);
+                } catch (e: any) {
+                  setPingOk(false);
+                  setPingNote("Cannot reach the server from this device. Check the connection or the API URL.");
+                } finally { setPingBusy(false); }
+              }}>{pingBusy ? "Testing…" : "Test connection"}</button>
+            </div>
           </div>
 
           <div style={{ border: "1px solid #dce8ef", borderRadius: 16, padding: 18, background: "#f8fafc" }}>

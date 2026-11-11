@@ -134,3 +134,6 @@ While Render builds from the branch, **pushing to `main` does nothing** — and 
 | API live but website shows "The MedAI API URL is not configured" | `VITE_API_URL` empty at build time | Set it on the website service, then **Manual Deploy** (rebuild, not restart) |
 | Website loads, new tabs say "Not found" | Website deployed before the API | Deploy the API first, then hard-refresh |
 | Doctor emails/codes never arrive | SMTP vars missing or Gmail app password instead of login password | Fill `SMTP_*`, see `.env.gmail.example` |
+| Android app says "Network error" but the site works | `CLIENT_ORIGIN` lists only the website, so the WebView origin `https://localhost` is rejected | Fixed in this branch: the API always accepts the Capacitor origins; `CLIENT_ORIGIN` is now a comma-separated list for extra sites |
+| Android app shows "The MedAI API URL is not configured" | APK was built without `VITE_API_URL` | Fixed in this branch: CI bakes `https://medaionline-1.onrender.com` in and fails the build if it is missing; set the repo variable `MEDAI_API_URL` to change it |
+| Android app opens to a blank screen after an update | A service worker cached the old `index.html` inside the WebView | Fixed in this branch: the shell no longer registers a service worker and clears any that exist |

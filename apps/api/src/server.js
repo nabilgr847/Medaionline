@@ -1,7 +1,7 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
 import express from "express";
 import crypto from "crypto";
-import cors from "cors";
+import corsMiddleware from "./cors.js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
@@ -20,7 +20,7 @@ const app=express();
 app.disable("x-powered-by");
 app.set("trust proxy",1); // Render/other reverse proxies: use the real client IP for rate limits and audit logs
 app.use(helmet());
-app.use(cors({origin:config.clientOrigin}));
+app.use(corsMiddleware);
 app.use(express.json({limit:"10mb"}));
 // Global limiter. Must answer in JSON (the web app parses it), and must not count the guest-room / heartbeat
 // polling requests: those fire every 1-3 seconds and would otherwise exhaust the IP's budget within minutes,
