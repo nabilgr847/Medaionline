@@ -239,3 +239,39 @@ export async function makePrescriptionPdf({qrText,patientName,patientAge,patient
   if(signatureHash){doc.moveDown(0.8);ensure(doc,40);doc.fontSize(7.5).fillColor(MUTED);put(doc,`In-app digital signature (Ed25519). Content hash: ${signatureHash}. This is not a government-issued qualified digital certificate.`,48,doc.y,{width:499});}
   return finish(doc,"MedAI Hospital - Prescription. Take medicines only as directed by your doctor.");
 }
+
+/** Invoice PDF. */
+export async function makeInvoicePdf(invoice){
+  const doc=newDoc("Invoice",`Invoice ${invoice.invoiceNumber}`);
+  badge(doc,"INVOICE","#087fbd");
+  metaGrid(doc,[
+    ["Invoice number",invoice.invoiceNumber],
+    ["Status",invoice.status.toUpperCase()],
+    ["Issued on",invoice.issuedAt?new Date(invoice.issuedAt).toLocaleDateString("en-GB",{timeZone:"Asia/Dhaka"}):"-"],
+    ["Due on",invoice.dueAt?new Date(invoice.dueAt).toLocaleDateString("en-GB",{timeZone:"Asia/Dhaka"}):"-"],
+    ["Total",`${invoice.total} ${invoice.currency||"BDT"}`],
+    ["Currency",invoice.currency||"BDT"]
+  ]);
+  h2(doc,"Bill to");
+  para(doc,`MedAI Hospital patient account (user id ${invoice.userId}). Contact support via the MedAI portal for billing queries.`);
+  h2(doc,"Line items");
+  const cols=[[48,30,"#"],[90,300,"Description"],[390,60,"Qty"],[450,60,"Unit price"],[510,90,"Total"]];
+  const head=()=>{const y=doc.y;doc.rect(48,y,499,20).fill("#087fbd");doc.fillColor("#fff").font("Helvetica-Bold").fontSize(8.5);cols.forEach(([x,w,t])=>doc.text(t,x+5,y+6,{width:w-6,lineBreak:false}));doc.y=y+20;doc.x=48;};
+  ensure(doc,40+(invoice.items.length||1)*22);head();
+  (invoice.items||[]).forEach((it,i)=>{
+    const cells=[String(i+1),it.description,String(it.quantity||1),`${(it.unitPrice||0)} ${invoice.currency||"BDT"}`,`${it.total||0} ${invoice.currency||"BDT"}`];
+    const h=Math.max(...cells.map((c,k)=>height(doc,c,cols[k][1]-8,8.6)))+10;
+    if(doc.y+h>775){doc.addPage();head();}
+    const y=doc.y;if(i%2)doc.rect(48,y,499,h).fill("#f4f8fb");doc.fillColor(NAVY).fontSize(8.6);
+    cells.forEach((c,k)=>put(doc,c,cols[k][0]+5,y+5,{width:cols[k][1]-8},k===1?"Helvetica-Bold":"Helvetica"));
+    doc.moveTo(48,y+h).lineTo(547,y+h).lineWidth(0.4).strokeColor("#dce8ef").stroke();doc.y=y+h;doc.x=48;
+  });
+  const subtotalRow=["Subtotal","",`${invoice.subtotal} ${invoice.currency||"BDT"}`];
+  const taxRow=["Tax","",`${invoice.tax||0} ${invoice.currency||"BDT"}`];
+  const totalRow=["TOTAL","",`${invoice.total} ${invoice.currency||"BDT"}`];
+  [subtotalRow,taxRow,totalRow].forEach(([k,_,v],i)=>{
+    ensure(doc,20);doc.font("Helvetica-Bold").fontSize(9).fillColor(i===2?"#b3261e":NAVY);put(doc,k,48,doc.y,{width:360});put(doc,v,400,doc.y,{width:90},"Helvetica-Bold");doc.y+=16;
+  });
+  doc.moveDown(0.8);para(doc,"Thank you for using MedAI Hospital. This invoice is generated electronically and is valid without a wet signature. Payments can be made via bKash, Nagad, Stripe, or at the clinic.",8,MUTED);
+  return finish(doc,"MedAI Hospital - Invoice. Keep this document for your records and tax purposes.");
+}

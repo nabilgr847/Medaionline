@@ -23,5 +23,12 @@ export const config = {
   requireAdminApproval: process.env.REQUIRE_ADMIN_APPROVAL === "true",
   appPublicUrl:process.env.APP_PUBLIC_URL||"http://localhost:5173",
   signingPrivateKey:process.env.PRESCRIPTION_SIGNING_PRIVATE_KEY_BASE64?Buffer.from(process.env.PRESCRIPTION_SIGNING_PRIVATE_KEY_BASE64,"base64").toString("utf8"):process.env.PRESCRIPTION_SIGNING_PRIVATE_KEY?.replace(/\\n/g,"\n"),
-  signingPublicKey:process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY_BASE64?Buffer.from(process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY_BASE64,"base64").toString("utf8"):process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY?.replace(/\\n/g,"\n")
+  signingPublicKey:process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY_BASE64?Buffer.from(process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY_BASE64,"base64").toString("utf8"):process.env.PRESCRIPTION_SIGNING_PUBLIC_KEY?.replace(/\\n/g,"\n"),
+  smsProvider:process.env.SMS_PROVIDER||"other",
+  twilioAccountSid:process.env.TWILIO_ACCOUNT_SID, twilioAuthToken:process.env.TWILIO_AUTH_TOKEN, twilioFrom:process.env.TWILIO_FROM,
+  msg91ApiKey:process.env.MSG91_API_KEY, msg91SenderId:process.env.MSG91_SENDER_ID,
+  stripeSecretKey:process.env.STRIPE_SECRET_KEY, stripeWebhookSecret:process.env.STRIPE_WEBHOOK_SECRET,
+  bkashAppKey:process.env.BKASH_APP_KEY, bkashAppSecret:process.env.BKASH_APP_SECRET, bkashUsername:process.env.BKASH_USERNAME, bkashPassword:process.env.BKASH_PASSWORD,
+  nagadMerchantId:process.env.NAGAD_MERCHANT_ID, nagadUsername:process.env.NAGAD_USERNAME, nagadPassword:process.env.NAGAD_PASSWORD,
+  appName:process.env.APP_NAME||"MedAI Hospital", supportEmail:process.env.SUPPORT_EMAIL||"support@medai.example"
 };

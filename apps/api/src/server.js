@@ -7,6 +7,7 @@ import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
 import {config} from "./config.js";
 import routes from "./routes.js";
+import commercialRoutes from "./commercial.js";
 import {User, Appointment, SystemError, CallSession} from "./models.js";
 import {hashPassword} from "./security.js";
 
@@ -28,6 +29,7 @@ const POLLING_PATH=/^\/api\/(temporary-consults\/[^/]+\/room\/|presence\/heartbe
 app.use(rateLimit({windowMs:15*60*1000,limit:600,standardHeaders:true,legacyHeaders:false,skip:req=>POLLING_PATH.test(req.originalUrl.split("?")[0]),message:{error:"Too many requests. Please wait a minute and try again."}}));
 app.get("/api/health",(_req,res)=>res.json({status:"ok",service:"MedAI Hospital API"}));
 app.use("/api",routes);
+app.use("/api/commercial",commercialRoutes);
 app.use((err,req,res,_next)=>{
   const requestId=crypto.randomUUID();
   console.error("API error:",{requestId,name:err.name,message:err.message,method:req.method,path:req.path});

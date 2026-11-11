@@ -23,6 +23,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Build web app for local bundling
+        working-directory: apps/web
+        run: |
+          npm install
+          npm run build
+          rm -rf ../mobile/www
+          cp -r dist ../mobile/www
+
       - name: Create Android project
         working-directory: apps/mobile
         run: |

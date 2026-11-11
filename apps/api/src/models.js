@@ -14,6 +14,8 @@ const userSchema = new Schema({
   emergencyContact: {name:String, phone:String, relationship:String},
   passwordChangedAt: Date, lastLoginAt:Date, lastSeenAt:Date,
   notifyEmailOnMessage: {type:Boolean, default:true},
+  biometricEnabled: {type:Boolean, default:false}, biometricType: {type:String, enum:["fingerprint","face","none"],default:"none"},
+  pushToken: {type:String, select:false}, pushTokenUpdatedAt: Date,
   passwordResetHash: {type:String, select:false},
   passwordResetExpires: {type:Date, select:false},
   pendingPassword: {type:String, select:false},
@@ -243,3 +245,160 @@ const accessAuditSchema = new Schema({
 },{timestamps:true});
 accessAuditSchema.index({resourceId:1,createdAt:-1});
 export const AccessAudit = model("AccessAudit",accessAuditSchema);
+
+// ================= COMMERCIAL / PAYMENT MODELS =================
+
+const paymentSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",default:null,index:true},
+  gateway:{type:String,enum:["bkash","nagad","stripe","cash","manual"],required:true},
+  transactionId:{type:String,index:true,sparse:true},
+  gatewayReference:{type:String,index:true,sparse:true},
+  amount:{type:Number,required:true},
+  currency:{type:String,default:"BDT"},
+  status:{type:String,enum:["pending","paid","failed","refunded","cancelled"],default:"pending",index:true},
+  purpose:{type:String,enum:["consultation","subscription","medicine","lab","other"],default:"consultation"},
+  invoiceId:{type:Schema.Types.ObjectId,ref:"Invoice",default:null,index:true},
+  metadata:Schema.Types.Mixed,
+  paidAt:Date
+},{timestamps:true});
+paymentSchema.index({userId:1,status:1,createdAt:-1});
+export const Payment = model("Payment",paymentSchema);
+
+const subscriptionPlanSchema = new Schema({
+  name:{type:String,required:true,unique:true},
+  slug:{type:String,required:true,unique:true,index:true},
+  description:String,
+  priceMonthly:{type:Number,default:0},
+  priceYearly:{type:Number,default:0},
+  currency:{type:String,default:"BDT"},
+  features:[{type:String,maxlength:200}],
+  maxAppointmentsPerMonth:{type:Number,default:0},
+  allowVideoCall:{type:Boolean,default:false},
+  allowPrescription:{type:Boolean,default:false},
+  allowFileUpload:{type:Boolean,default:false},
+  prioritySupport:{type:Boolean,default:false},
+  active:{type:Boolean,default:true},
+  sortOrder:{type:Number,default:0}
+},{timestamps:true});
+export const SubscriptionPlan = model("SubscriptionPlan",subscriptionPlanSchema);
+
+const userSubscriptionSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  planId:{type:Schema.Types.ObjectId,ref:"SubscriptionPlan",required:true},
+  status:{type:String,enum:["active","expired","cancelled","past_due"],default:"active",index:true},
+  startedAt:{type:Date,default:Date.now},
+  expiresAt:{type:Date},
+  autoRenew:{type:Boolean,default:true},
+  paymentId:{type:Schema.Types.ObjectId,ref:"Payment",default:null}
+},{timestamps:true});
+userSubscriptionSchema.index({userId:1,status:1});
+export const UserSubscription = model("UserSubscription",userSubscriptionSchema);
+
+const invoiceSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",default:null,index:true},
+  invoiceNumber:{type:String,required:true,unique:true,index:true},
+  items:[{description:String,quantity:{type:Number,default:1},unitPrice:{type:Number,default:0},total:{type:Number,default:0}}],
+  subtotal:{type:Number,default:0},
+  tax:{type:Number,default:0},
+  total:{type:Number,required:true},
+  currency:{type:String,default:"BDT"},
+  status:{type:String,enum:["draft","sent","paid","overdue","cancelled"],default:"draft",index:true},
+  issuedAt:{type:Date,default:Date.now},
+  dueAt:Date,
+  paidAt:Date,
+  pdfFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}
+},{timestamps:true});
+export const Invoice = model("Invoice",invoiceSchema);
+
+const smsMessageSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",default:null,index:true},
+  to:{type:String,required:true},
+  body:{type:String,required:true},
+  provider:{type:String,enum:["twilio","msg91","bulk_sms","other"],default:"other"},
+  messageId:{type:String,index:true,sparse:true},
+  status:{type:String,enum:["queued","sent","delivered","failed"],default:"queued"},
+  purpose:{type:String,enum:["otp","appointment","reminder","marketing","other"],default:"other"}
+},{timestamps:true});
+smsMessageSchema.index({userId:1,createdAt:-1});
+export const SMSMessage = model("SMSMessage",smsMessageSchema);
+
+const twoFactorSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,unique:true,index:true},
+  enabled:{type:Boolean,default:false},
+  secret:{type:String,select:false},
+  backupCodes:[{type:String,select:false}],
+  verifiedAt:{type:Date}
+},{timestamps:true});
+export const TwoFactorAuth = model("TwoFactorAuth",twoFactorSchema);
+
+const dataExportSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  status:{type:String,enum:["requested","processing","completed","failed"],default:"requested",index:true},
+  downloadUrl:{type:String,default:""},
+  expiresAt:{type:Date},
+  requestedAt:{type:Date,default:Date.now}
+},{timestamps:true});
+export const DataExportRequest = model("DataExportRequest",dataExportSchema);
+
+const doctorAvailabilitySchema = new Schema({
+  doctorId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  dayOfWeek:{type:Number,required:true,min:0,max:6},
+  startTime:{type:String,required:true},
+  endTime:{type:String,required:true},
+  slotDurationMinutes:{type:Number,default:30},
+  breakStart:{type:String,default:""},
+  breakEnd:{type:String,default:""},
+  active:{type:Boolean,default:true}
+},{timestamps:true});
+doctorAvailabilitySchema.index({doctorId:1,dayOfWeek:1});
+export const DoctorAvailability = model("DoctorAvailability",doctorAvailabilitySchema);
+
+const pharmacyOrderSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  prescriptionId:{type:Schema.Types.ObjectId,ref:"Prescription",default:null,index:true},
+  items:[{medicineId:{type:Schema.Types.ObjectId,ref:"Medicine"},brand:String,generic:String,quantity:{type:Number,default:1},unitPrice:{type:Number,default:0}}],
+  total:{type:Number,default:0},
+  status:{type:String,enum:["pending","confirmed","dispatched","delivered","cancelled"],default:"pending",index:true},
+  pharmacyName:String, deliveryAddress:String, phone:String
+},{timestamps:true});
+export const PharmacyOrder = model("PharmacyOrder",pharmacyOrderSchema);
+
+const labOrderSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  appointmentId:{type:Schema.Types.ObjectId,ref:"Appointment",default:null,index:true},
+  tests:[{name:String,code:String,price:{type:Number,default:0},status:{type:String,enum:["ordered","collected","completed","cancelled"],default:"ordered"}}],
+  total:{type:Number,default:0},
+  status:{type:String,enum:["ordered","collected","completed","cancelled"],default:"ordered",index:true},
+  labName:String, sampleCollectedAt:Date, resultsFileId:{type:Schema.Types.ObjectId,ref:"PrivateFile",default:null}
+},{timestamps:true});
+export const LabOrder = model("LabOrder",labOrderSchema);
+
+// ================= MEDICINE ADHERENCE TRACKER (UNIQUE FEATURE) =================
+
+const medicineReminderSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  medicineName:{type:String,required:true,maxlength:200},
+  genericName:{type:String,maxlength:200},
+  dosage:{type:String,maxlength:100}, // e.g. "500 mg"
+  frequencyPerDay:{type:Number,required:true,min:1,max:24}, // times per day
+  timesOfDay:[{type:String}], // e.g. ["08:00","20:00"]
+  startDate:{type:Date,required:true},
+  endDate:{type:Date},
+  instructions:{type:String,maxlength:1000},
+  active:{type:Boolean,default:true,index:true},
+  createdBy:{type:String,enum:["patient","doctor"],default:"patient"}
+},{timestamps:true});
+medicineReminderSchema.index({patientId:1,active:1});
+export const MedicineReminder = model("MedicineReminder",medicineReminderSchema);
+
+const medicineIntakeLogSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  reminderId:{type:Schema.Types.ObjectId,ref:"MedicineReminder",required:true,index:true},
+  takenAt:{type:Date,default:Date.now,index:true},
+  status:{type:String,enum:["taken","skipped","missed"],default:"taken",index:true},
+  notes:{type:String,maxlength:500}
+},{timestamps:true});
+medicineIntakeLogSchema.index({patientId:1,takenAt:-1});
+export const MedicineIntakeLog = model("MedicineIntakeLog",medicineIntakeLogSchema);
