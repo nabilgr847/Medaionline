@@ -493,3 +493,43 @@ button.small{ min-height:36px; padding:7px 12px; font-size:13px; border-radius:1
 @media(prefers-reduced-motion:reduce){
   .drawer, .sheet, .drawerbackdrop, .sheetbackdrop{ animation:none; }
 }
+
+/* ==========================================================================
+   Fluid guard rails — nothing may push the page wider than the phone screen
+   ========================================================================== */
+html, body{ width:100%; max-width:100%; overflow-x:hidden; }
+body{ overflow-wrap:anywhere; word-break:normal; }
+img, svg, video, canvas, iframe{ max-width:100%; height:auto; }
+.shell, main, section, article, aside, form, fieldset{ min-width:0; max-width:100%; }
+.row, .grid, .welcome, .tabs, .dashboard > *{ min-width:0; }
+.row > *, .grid > *, .welcome > *{ min-width:0; }
+
+/* Any table that is not already inside a scroll wrapper must not stretch the page. */
+@media(max-width:900px){
+  table{ max-width:100%; }
+  .tablewrap{ max-width:100%; }
+
+  /* Main dashboard cards stack instead of squeezing side by side. */
+  .welcome{ flex-direction:column; align-items:flex-start; gap:12px; }
+  .welcome .role{ align-self:flex-start; }
+  .grid.two, .grid.four, .grid.three{ grid-template-columns:1fr; }
+  .hero{ padding:28px 16px; }
+  .hero h1{ font-size:clamp(1.6rem,7vw,2.1rem); }
+  .hero p{ font-size:.98rem; line-height:1.65; }
+  section > h2{ font-size:1.35rem; }
+
+  /* Chips and long labels wrap instead of overflowing their row. */
+  .row{ flex-wrap:wrap; }
+  .role{ max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Full-bleed call screen must never trigger a horizontal scrollbar. */
+  .callstage{ width:100%!important; max-width:100%!important; }
+}
+
+/* Very small phones (360px and below) */
+@media(max-width:360px){
+  body{ font-size:14.5px; }
+  .dashboard, section:not(.hero):not(.auth){ padding:12px 10px; }
+  .tabnav-btn{ min-height:52px; padding:8px 12px; }
+  .sheetitem, .draweritem{ min-height:48px; }
+}
