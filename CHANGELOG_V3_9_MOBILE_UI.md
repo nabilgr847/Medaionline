@@ -50,3 +50,32 @@ hamburger button. Nothing was removed from the desktop layout.
   body scroll is locked then restored.
 - Desktop markup unchanged: the grid still renders with `role="tablist"` and
   `aria-selected`.
+
+---
+
+## Follow-up: restored the component styles the rewrite dropped
+
+`style.css` had been replaced wholesale, which silently removed every rule for the
+banner/slider, the video call, the AI chat, the QR scanner, notifications and a set of
+panel helpers. On a phone that showed up as the home banner rendering at its natural
+pixel width and pushing the page wider than the screen, plus broken call and chat
+screens.
+
+`apps/web/src/components.css` (imported right after `style.css`) now covers those
+components, all built on the same tokens:
+
+- **Banner**: `img.banner` is capped at 100% width with a 16:10 aspect ratio, rounded and
+  bounded; `.dots` is a small pill of dot buttons; `.hero.compact` is a short card with a
+  150px image strip.
+- **Video call**: stage, local/remote video, round buttons, ringing screen, in-call sheet,
+  minimised bar and toasts.
+- **AI chat**: chat shell with a scrolling log, user/assistant/emergency bubbles, typing
+  dots, chips, composer, history list and the report-viewer card (`rv-*`).
+- **QR scanner**: full-screen overlay, square preview, framing border, hints and errors.
+- **Notifications/alerts**: cards, live-call pill, conversation list, observer grid, note
+  rows and the banner strip.
+- **Panel helpers**: `.cols`, `.full`, `.stack`, `.itemhead`, `.sgitem`, `.suggestion`,
+  `.answer`, `.meddetails`, `.picklist`, `.chatimg`, spinners and more.
+
+Verified with a scanner that walks every `className` used in `src/*.tsx` and checks it
+against both stylesheets: **0 unstyled classes** (it was 127 before).
