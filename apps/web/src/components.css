@@ -516,3 +516,19 @@ img.banner{
   .frow .fval{ flex:1 1 100%; }
   .histitem .histbtn{ font-size:12.5px; }
 }
+
+/* Sign-in screen: "Server address" panel (works before logging in). */
+.serverfix{ margin-top:10px; border:1px solid var(--line); border-radius:12px; background:var(--soft); padding:8px 12px; }
+.serverfix > summary{ cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted); list-style:none; }
+.serverfix > summary::-webkit-details-marker{ display:none; }
+.serverfix > summary::before{ content:"⚙ "; }
+.serverfix > summary:hover{ color:var(--brand); }
+.serverfix form{ display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+.serverfix input{ width:100%; font-size:13px; }
+.serverfix .row{ display:flex; gap:8px; }
+.serverfix .row button{ flex:1 1 0; }
+.serverfix .muted.small,
+.serverfix .ok.small,
+.serverfix .warn.small{ font-size:11.5px; line-height:1.5; margin:8px 0 0; }
+.serverfix .ok.small{ color:var(--ok); }
+.serverfix .warn.small{ color:var(--warn); }

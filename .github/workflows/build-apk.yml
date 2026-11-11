@@ -30,7 +30,7 @@ jobs:
         # "The MedAI API URL is not configured". Override with the repository
         # variable MEDAI_API_URL if the API ever moves.
         env:
-          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline-1.onrender.com' }}
+          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline.onrender.com' }}
         run: |
           npm install
           npm run build
@@ -39,7 +39,7 @@ jobs:
 
       - name: Verify the bundled app points at the API
         env:
-          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline-1.onrender.com' }}
+          VITE_API_URL: ${{ vars.MEDAI_API_URL || 'https://medaionline.onrender.com' }}
         run: |
           host="${VITE_API_URL#https://}"; host="${host#http://}"; host="${host%%/*}"
           echo "Expecting API host in bundle: $host"

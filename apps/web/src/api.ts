@@ -4,27 +4,31 @@
 // The Android app is built from a static bundle, so a missing VITE_API_URL at
 // build time used to leave every screen unusable ("API URL is not configured").
 // Inside the Capacitor shell we therefore fall back to the production API.
-const DEFAULT_API = "https://medaionline-1.onrender.com";
+const DEFAULT_API = "https://medaionline.onrender.com";
 
-/** Hosts worth trying, in order. The first one that answers becomes the API. */
+/**
+ * Hosts that are the *website*, never the API. The static site answers every path with
+ * index.html, so probing it can only ever produce a misleading "blocked" answer.
+ */
+const FRONTEND_HOSTS = ["medaionline-1.onrender.com"];
+
+/** API hosts worth trying, in order. The first one that answers becomes the API. */
 const CANDIDATE_HOSTS = [
-  "https://medaionline-1.onrender.com",
-  "https://medai-hospital-v2-api.onrender.com",
+  "https://medaionline.onrender.com",       // backend (Render service "Medaionline")
+  "https://medai-hospital-v2-api.onrender.com", // blueprint name, if ever deployed
 ];
-
-/** Same-origin is worth trying: on some Render setups the API is served next to the site. */
-function sameOriginCandidate(): string {
-  try {
-    if (location.protocol !== "https:") return "";
-    if (isNativeShell() || isLocalDev()) return "";
-    return location.origin;
-  } catch { return ""; }
-}
 
 const API_STORAGE_KEY = "medai_api_base";
 const API_PROBE_TIMEOUT = 6000;
 
-export type ApiStatus = "ok" | "blocked" | "down" | "unconfigured";
+/**
+ * ok        — a real MedAI API answered (possibly reporting a configuration problem)
+ * blocked   — the host answers but the browser may not read it (CORS)
+ * notapi    — an HTTP answer came back, but it is not our API (usually the website)
+ * error     — our API answered with an HTTP error (it is running but failing)
+ * down      — nothing answered at all
+ */
+export type ApiStatus = "ok" | "blocked" | "notapi" | "error" | "down" | "unconfigured";
 
 function isNativeShell(): boolean {
   try {
@@ -74,26 +78,26 @@ const CONFIGURED: string = (() => {
   return DEFAULT_API;
 })();
 
-/**
- * Probe one host.
- *  - "ok":      answered a normal (CORS) request — fully usable.
- *  - "blocked": host is alive but the browser could not read the answer (CORS).
- *  - "down":    nothing answered at all.
- */
+/** True when the address belongs to the static website instead of the API. */
+function isFrontendHost(base: string): boolean {
+  const host = String(base || "").replace(/^https?:\/\//i, "").split("/")[0].toLowerCase();
+  return FRONTEND_HOSTS.includes(host);
+}
+
 async function probe(base: string): Promise<ApiStatus> {
   const control = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = control ? setTimeout(() => control.abort(), API_PROBE_TIMEOUT) : null;
   try {
     const r = await fetch(base + "/api/health", { cache: "no-store", signal: control?.signal });
-    if (!r.ok) return "blocked";
+    if (!r.ok) return "error";           // answered, but our API is failing on that host
     // A static site also answers 200 — only accept a real MedAI API answer.
     const body = await r.text();
     try {
       const j = JSON.parse(body);
-      if (j && (j.status === "ok" || /medai/i.test(String(j.service || "")))) return "ok";
-      return "blocked";
+      if (j && (j.status === "ok" || j.status === "misconfigured" || /medai/i.test(String(j.service || "")))) return "ok";
+      return "notapi";
     } catch {
-      return "blocked";   // HTML page, not our API
+      return "notapi";                   // HTML page: this is the website, not the API
     }
   } catch {
     // A CORS rejection and a dead host both throw. no-cors separates them:
@@ -109,27 +113,36 @@ async function probe(base: string): Promise<ApiStatus> {
   }
 }
 
+/** How useful an answer is when nothing came back "ok". */
+const STATUS_RANK: Record<ApiStatus, number> = { ok: 5, blocked: 4, error: 3, notapi: 2, down: 1, unconfigured: 0 };
+
 let resolved: { base: string; status: ApiStatus } | null = null;
 let resolving: Promise<{ base: string; status: ApiStatus }> | null = null;
 
-/** Pick the first reachable API host. Cached for the session, remembered across launches. */
+/** Pick the first working API host. Cached for the session, remembered across launches. */
 async function resolveApi(): Promise<{ base: string; status: ApiStatus }> {
   if (resolved) return resolved;
   if (resolving) return resolving;
 
   resolving = (async () => {
+    // 1) An address the user (or a ?api= link) chose explicitly wins — but only if it works.
     const explicit = overrideFromUrl() || savedBase();
+    let explicitResult: { base: string; status: ApiStatus } | null = null;
     if (explicit) {
       const status = await probe(explicit);
-      if (status !== "down") {
-        resolved = { base: explicit, status };
-        return resolved;
+      if (status === "ok") { resolved = { base: explicit, status }; return resolved; }
+      explicitResult = { base: explicit, status };
+      // A dead address, the website itself, or something that is not our API must not be
+      // remembered, otherwise the app keeps failing on it forever.
+      if (status === "down" || status === "notapi" || isFrontendHost(explicit)) {
+        try { localStorage.removeItem(API_STORAGE_KEY); } catch { /* ignore */ }
       }
-      try { localStorage.removeItem(API_STORAGE_KEY); } catch { /* ignore */ }
     }
 
-    const list = [CONFIGURED, ...CANDIDATE_HOSTS, sameOriginCandidate()].filter(Boolean).map(normalise);
-    const unique = Array.from(new Set(list));
+    // 2) The build's own address, then the known API hosts — the website host is skipped.
+    const unique = Array.from(new Set([CONFIGURED, ...CANDIDATE_HOSTS].filter(Boolean).map(normalise)))
+      .filter((b) => !isFrontendHost(b));
+    let best: { base: string; status: ApiStatus } | null = null;
     for (const base of unique) {
       const status = await probe(base);
       if (status === "ok") {
@@ -137,12 +150,13 @@ async function resolveApi(): Promise<{ base: string; status: ApiStatus }> {
         try { localStorage.setItem(API_STORAGE_KEY, base); } catch { /* ignore */ }
         return resolved;
       }
+      if (!best || STATUS_RANK[status] > STATUS_RANK[best.status]) best = { base, status };
     }
 
-    // Nothing answered cleanly. Keep the configured address so messages stay specific.
-    const fallback = unique[0] || "";
-    const lastStatus: ApiStatus = fallback ? await probe(fallback) : "unconfigured";
-    resolved = { base: fallback, status: lastStatus };
+    // 3) Nothing worked. A real CORS block on an explicitly chosen address is the most
+    //    useful thing we can report; otherwise report the least-bad probe result.
+    if (explicitResult?.status === "blocked") { resolved = explicitResult; return resolved; }
+    resolved = best || { base: unique[0] || "", status: unique.length ? "down" : "unconfigured" };
     return resolved;
   })();
 
@@ -162,13 +176,18 @@ export function noteApiStatus(s: ApiStatus) { API_STATUS = s; }
 
 export const API_CONFIG_ERROR = "This build has no API address. Rebuild the site with VITE_API_URL set to the API URL.";
 export const API_CORS_ERROR = "The MedAI server is reachable but is blocking requests from this app. The API needs the latest MedAI build deployed on the server.";
+export const API_NOT_API_ERROR = "That address is the MedAI website, not the API server. Use the backend address (" + DEFAULT_API.replace(/^https?:\/\//, "") + ").";
+export const API_SERVER_ERROR = "The MedAI API answered with an error. The server is running, but something inside it failed — check the Render logs for this service.";
 
 /** Called before any request so a configuration problem is reported as itself. */
 async function apiBase(): Promise<string> {
   const { base, status } = await resolveApi();
   if (!base) throw new Error(API_CONFIG_ERROR);
+  if (isFrontendHost(base)) throw new Error(API_NOT_API_ERROR);
   noteApiStatus(status);
   if (status === "blocked") throw new Error(API_CORS_ERROR);
+  if (status === "notapi") throw new Error(API_NOT_API_ERROR);
+  if (status === "error") throw new Error(API_SERVER_ERROR);
   return base;
 }
 
@@ -190,10 +209,12 @@ export function clearApiBase(): void {
   resolved = null; resolving = null;
 }
 
-/** Force a fresh lookup (used by the "Test connection" button). */
+/**
+ * Force a fresh lookup (used by the "Test connection" button).
+ * Keeps the address the user saved by hand — only the in-memory answer is dropped.
+ */
 export async function resetApiResolution(): Promise<void> {
   resolved = null; resolving = null;
-  try { localStorage.removeItem(API_STORAGE_KEY); } catch { /* ignore */ }
 }
 
 /** Health check used by the on-screen diagnostics. */
@@ -215,6 +236,9 @@ export async function pingServer(): Promise<{ ok: boolean; ms: number; status: A
     return { ok: true, ms, status, base, detail: "Reachable (" + ms + " ms)" };
   }
   if (status === "blocked") return { ok: false, ms, status, base, detail: host + " is up but blocks this app (CORS) — the API build is out of date" };
+  if (status === "notapi") return { ok: false, ms, status, base, detail: host + " is the MedAI website, not the API — set the backend address" };
+  if (status === "error") return { ok: false, ms, status, base, detail: host + " answered with a server error — check the Render logs for this service" };
+  if (status === "unconfigured") return { ok: false, ms, status, base: "", detail: API_CONFIG_ERROR };
   return { ok: false, ms, status, base, detail: "Cannot reach " + host + " — no server answered" };
 }
 
