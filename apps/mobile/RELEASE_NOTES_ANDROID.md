@@ -1,3 +1,13 @@
+## Build 2026-11-11 (biometric sign-in)
+
+- **Sign in with fingerprint / face unlock** directly on the login screen, plus the existing
+  app lock. The device check is the only thing that can unlock the saved session.
+- Offered right after the first password sign-in; a real sign-out removes the saved session.
+- The "Server / Test connection" diagnostics are no longer shown on the public sign-in page
+  (open `?debug=1` if you ever need them). Settings → Security keeps the same controls.
+- API host detection accepts only the real API (`medaionline.onrender.com`) and never the
+  static website host.
+
 # MedAI Hospital — Android app
 
 Latest Android build of MedAI Hospital.

@@ -7,6 +7,38 @@
 
 export const BIOMETRIC_LOCK_KEY = "medai_biometric_lock";
 
+/**
+ * The session kept for biometric sign-in.
+ *
+ * "Sign out" must not leave a usable session behind, but the device-lock screen and the
+ * "Sign in with fingerprint" button would be pointless without one. So the token is kept
+ * in its own slot that only a *successful* fingerprint/face check can use, and it is
+ * removed on a real sign-out, on a rejected token, or when the lock is switched off.
+ */
+export const BIOMETRIC_TOKEN_KEY = "medai_bio_token";
+
+export function saveBiometricToken(token: string) {
+  try { token ? localStorage.setItem(BIOMETRIC_TOKEN_KEY, token) : localStorage.removeItem(BIOMETRIC_TOKEN_KEY); } catch { /* ignore */ }
+}
+export function biometricToken(): string {
+  try { return localStorage.getItem(BIOMETRIC_TOKEN_KEY) || ""; } catch { return ""; }
+}
+export function forgetBiometricToken() {
+  try { localStorage.removeItem(BIOMETRIC_TOKEN_KEY); } catch { /* ignore */ }
+}
+
+/** A short, human name for the biometric type this device offers. */
+export function biometricLabel(type: string): string {
+  switch (type) {
+    case "fingerprint": return "fingerprint";
+    case "faceid":
+    case "face": return "face unlock";
+    case "iris": return "iris unlock";
+    case "touchid": return "Touch ID";
+    default: return "fingerprint or face unlock";
+  }
+}
+
 /** True when the page runs inside the Capacitor Android shell. */
 export function isNativeApp(): boolean {
   const cap = (window as any).Capacitor;
@@ -20,7 +52,7 @@ export function biometricLockEnabled(): boolean {
 
 export function setBiometricLockEnabled(enabled: boolean) {
   if (enabled) localStorage.setItem(BIOMETRIC_LOCK_KEY, "1");
-  else localStorage.removeItem(BIOMETRIC_LOCK_KEY);
+  else { localStorage.removeItem(BIOMETRIC_LOCK_KEY); forgetBiometricToken(); }
 }
 
 export type BiometricCheck =
