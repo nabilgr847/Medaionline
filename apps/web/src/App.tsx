@@ -5,6 +5,8 @@ import { makeApi, json, API, pingServer, setApiBase, clearApiBase } from "./api"
 import { HomeHero } from "./hero";
 import { AdSlot, setAdsHidden, useAdsHidden } from "./ads";
 import { useView } from "./viewport";
+import { ConnectionBar } from "./net";
+import { InstallCard, UpdateToast, useInstall } from "./pwa";
 import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
@@ -125,6 +127,7 @@ function MainApp() {
   const nativeApp = isNativeApp();
   const viewKind = useView();          // phone / tablet / desktop layouts
   const adsOff = useAdsHidden();
+  const inst = useInstall();
   const [bio, setBio] = useState<{ available: boolean; type: string; reason?: string }>({ available: false, type: "none" });
   const [bioBusy, setBioBusy] = useState(false);
   const [bioNote, setBioNote] = useState("");
@@ -246,11 +249,10 @@ function MainApp() {
     }} />;
 
   return <BannerContext.Provider value={banner}><div className="shell">
+    <ConnectionBar />
     <header>
       <a className="brand" href="#top" aria-label="MedAI Hospital home"><img src="/branding/medai-logo.svg" alt="MedAI Hospital" /></a>
       <nav className="desktopnav">
-        <a href="#services">Services</a>
-        <a href="#safety">Safety</a>
         {!user && <a href="#portal" onClick={() => setView("home")}>Sign in</a>}
         {user && <a href="#dashboard" onClick={(e) => { e.preventDefault(); document.getElementById("dashboard")?.scrollIntoView({ behavior: "smooth" }); }}>Dashboard</a>}
       </nav>
@@ -285,9 +287,8 @@ function MainApp() {
           <div className="drawerlinks">
             {user && <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("dashboard")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🏠</span>Dashboard</button>}
             {!user && <button className="draweritem" onClick={() => { setMenuOpen(false); setView("home"); document.getElementById("portal")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🔑</span>Sign in / Create account</button>}
-            <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("services")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">✚</span>Services</button>
-            <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("safety")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🛡️</span>Safety &amp; privacy</button>
             {!user && <button className="draweritem" onClick={() => { setMenuOpen(false); setView("apply"); }}><span aria-hidden="true">👨‍⚕️</span>Apply for a doctor account</button>}
+            {inst.canInstall && <button className="draweritem" onClick={async () => { await inst.install(); setMenuOpen(false); }}><span aria-hidden="true">📲</span>Install MedAI app</button>}
             <button className="draweritem" onClick={() => setAdsHidden(!adsOff)} aria-pressed={!adsOff}>
               <span aria-hidden="true">📣</span>{adsOff ? "Show sponsored cards" : "Hide sponsored cards"}
             </button>
@@ -307,6 +308,7 @@ function MainApp() {
       <HomeHero banner={banner} signedIn={false}
         onPrimary={() => document.getElementById("portal")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
       <div className="home-ad"><AdSlot placement="home" variant={viewKind === "mobile" ? "wide" : "rail"} /></div>
+      <div className="home-ad"><InstallCard /></div>
       <section className="auth" id="portal"><div>
         <h2>{step === "code" ? "Verify your email" : step === "reset" ? "Reset your password" : mode === "login" ? "Welcome back" : "Create your patient account"}</h2>
                 {step === "form" && <>
@@ -376,7 +378,7 @@ function MainApp() {
 
     {user && user.role !== "admin" && <AlertCenter api={api} />}
     {user && user.role !== "admin" && <IncomingCallBanner api={api} />}
-    {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
+    {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
       {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
       {user.role !== "admin" && <AdSlot placement="dashboard" variant="wide" />}
@@ -386,9 +388,8 @@ function MainApp() {
       {user && <CommercialPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
     </section>}
 
-    <section id="services"><p className="eyebrow">CARE, CONNECTED</p><h2>Tools to support your health journey</h2><div className="grid three"><article><div className="service-icon" aria-hidden="true">▤</div><h3>Medical report hub</h3><p>Organize private reports and share them only through authorized care workflows.</p></article><article><div className="service-icon" aria-hidden="true">✚</div><h3>Doctor consultation</h3><p>Appointment requests, clinician messaging and doctor-written prescriptions.</p></article><article><div className="service-icon" aria-hidden="true">♡</div><h3>Medicine information</h3><p>Structured medicine information for review. MedAI does not independently prescribe treatment.</p></article></div></section>
-    <section id="safety"><p className="eyebrow">SAFETY BY DESIGN</p><h2>Clinical safety comes first</h2><p>MedAI provides general health information and organization tools. It is not a diagnosis, a substitute for a qualified clinician, or an emergency service. For severe breathing difficulty, chest pain, stroke symptoms, unconsciousness, or severe bleeding, seek emergency care immediately. In Bangladesh, call 999.</p></section>
-    <footer><img src="/branding/medai-logo.svg" alt="" /><p>MedAI Hospital · Your Health, Our Priority</p><p className="copyright">© {new Date().getFullYear() < 2026 ? 2026 : new Date().getFullYear()} MD Gausur Rahman Nabil. All rights reserved.</p></footer></div></BannerContext.Provider>;
+    <footer><img src="/branding/medai-logo.svg" alt="" /><p className="copyright">© {new Date().getFullYear() < 2026 ? 2026 : new Date().getFullYear()} MD Gausur Rahman Nabil. All rights reserved.</p><p className="emergency">Emergency in Bangladesh: call <a href="tel:999">999</a></p></footer>
+    <UpdateToast /></div></BannerContext.Provider>;
 }
 
 function resetTokenFromUrl() { const q = new URLSearchParams(window.location.search); return q.get("reset") || q.get("token") || ""; }

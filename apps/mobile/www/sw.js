@@ -2,8 +2,20 @@
 // Privacy: this app handles medical data, so ONLY same-origin static app files
 // are cached. API calls, uploads, downloads and anything cross-origin are never
 // touched or stored.
-const CACHE = "medai-shell-v5";
-const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
+const CACHE = "medai-shell-v6";
+const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/branding/medai-logo.svg"];
+
+/** Shown when the phone is offline and nothing was cached yet (first ever visit). */
+const OFFLINE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MedAI Hospital - offline</title>
+<style>body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f9fc;color:#0f172a;
+display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+div{max-width:420px;text-align:center}h1{font-size:1.2rem;margin:0 0 8px}p{color:#475569;line-height:1.6;margin:0 0 16px;font-size:.95rem}
+a{display:inline-block;min-height:48px;line-height:48px;padding:0 22px;border-radius:12px;background:#0b5ed6;color:#fff;
+text-decoration:none;font-weight:700}</style></head><body><div>
+<h1>You are offline</h1><p>MedAI needs a connection for the first load. Your saved screens open again as soon as you are back online.</p>
+<a href="/">Try again</a></div></body></html>`;
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
@@ -31,7 +43,11 @@ self.addEventListener("fetch", (e) => {
       fetch(req).then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put("/", copy)); }
         return res;
-      }).catch(() => caches.match("/").then((r) => r || Response.error()))
+      }).catch(async () => {
+        const hit = await caches.match("/");
+        if (hit) return hit;
+        return new Response(OFFLINE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      })
     );
     return;
   }
@@ -46,7 +62,7 @@ self.addEventListener("fetch", (e) => {
           caches.open(CACHE).then((c) => c.put(req, copy));
         }
         return res;
-      });
+      }).catch(() => Response.error());
     })
   );
 });

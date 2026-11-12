@@ -63,6 +63,10 @@ jobs:
 
       - name: Create Android project
         working-directory: apps/mobile
+        # Optional: rotate the signing password by adding the MEDAI_STORE_PASSWORD secret.
+        # The keystore itself stays in the repository until it is replaced (see SECURITY.md).
+        env:
+          MEDAI_STORE_PASSWORD: ${{ secrets.MEDAI_STORE_PASSWORD }}
         run: |
           npm install
           npx cap add android
