@@ -63,9 +63,15 @@ if not keystore.exists():
 # The password comes from the environment (GitHub secret MEDAI_STORE_PASSWORD) when it is
 # set, so it can be rotated without editing this file. The fallback keeps old builds working
 # until that secret exists.
-store_pass = os.environ.get("MEDAI_STORE_PASSWORD", "medaiapp2026")
+# An unset GitHub secret arrives as an EMPTY string, not as "missing" -- so `or` is required
+# here. Reading it with a default made the build sign with storePassword "" and fail.
+store_pass = (os.environ.get("MEDAI_STORE_PASSWORD") or "").strip() or "medaiapp2026"
+if not store_pass:
+    raise SystemExit("Signing password is empty - cannot sign the APK.")
 if store_pass == "medaiapp2026":
     print("NOTE: using the built-in signing password; set the MEDAI_STORE_PASSWORD secret to override it.")
+else:
+    print("Signing with the password from MEDAI_STORE_PASSWORD.")
 signing = (
     "    signingConfigs {\n        medai {\n"
     '            storeFile file("../../medai-release.jks")\n'
