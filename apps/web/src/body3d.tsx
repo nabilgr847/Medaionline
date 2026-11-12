@@ -171,8 +171,16 @@ async function buildBody(
   let pinchStart = 0;
   let zoomStart = HOME_Z;
   let dragging = false;
-
-  const zoomTo = (z: number) => { camera.position.z = Math.max(1.15, Math.min(6.6, z)); };
+  // Inertia: after a flick the body keeps turning, then slows down — it feels like a real object.
+  let spinX = 0;
+  let spinY = 0;
+  let lastMoveAt = 0;
+  let lastTapAt = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
+  // Zoom is animated towards a target so a wheel step or a pinch is smooth, not a jump.
+  let zoomTarget = HOME_Z;
+  const setZoom = (z: number) => { zoomTarget = Math.max(0.9, Math.min(6.6, z)); };
 
   const raycast = (clientX: number, clientY: number) => {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -220,25 +228,42 @@ async function buildBody(
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      if (pinchStart) zoomTo(zoomStart * (pinchStart / distance));
+      if (pinchStart) setZoom(zoomStart * (pinchStart / distance));
       return;
     }
     travelled += Math.abs(dx) + Math.abs(dy);
     if (dragging) {
+      // Rotate around the vertical axis freely, and up to ~70° up/down so the body can be
+      // looked at from above or below without flipping upside down.
       group.rotation.y += dx * 0.011;
-      group.rotation.x = Math.max(-0.55, Math.min(0.55, group.rotation.x + dy * 0.006));
+      group.rotation.x = Math.max(-1.2, Math.min(1.2, group.rotation.x + dy * 0.006));
+      spinY = dx * 0.011;
+      spinX = dy * 0.006;
+      lastMoveAt = performance.now();
     }
   };
   const onPointerUp = (e: PointerEvent) => {
     const wasSingle = pointers.size === 1;
     pointers.delete(e.pointerId);
     dragging = false;
-    if (wasSingle && travelled < 8) raycast(e.clientX, e.clientY);
+    if (wasSingle && travelled < 8) {
+      // A quick second tap in the same spot zooms in (and again to go back out).
+      const now = performance.now();
+      if (now - lastTapAt < 320 && Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 30) {
+        setZoom(zoomTarget > 1.8 ? HOME_Z : 1.45);
+        lastTapAt = 0;
+        return;
+      }
+      lastTapAt = now; lastTapX = e.clientX; lastTapY = e.clientY;
+      raycast(e.clientX, e.clientY);
+    }
     if (pointers.size < 2) pinchStart = 0;
+    // A flick that stopped long ago should not spin the body.
+    if (performance.now() - lastMoveAt > 120) { spinX = 0; spinY = 0; }
   };
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    zoomTo(camera.position.z * (1 + Math.sign(e.deltaY) * 0.12));
+    setZoom(zoomTarget * (1 + Math.sign(e.deltaY) * 0.12));
   };
 
   const canvas = renderer.domElement;
@@ -264,26 +289,52 @@ async function buildBody(
   let last = performance.now();
   let idle = 0;
   const tick = (now: number) => {
-    idle += Math.min(64, now - last);
+    const dt = Math.min(64, now - last);
+    idle += dt;
     last = now;
-    if (!reduceMotion && idle > 4000 && !dragging && pointers.size === 0) group.rotation.y += 0.018;
+    // Let a flick glide to a stop.
+    if (!dragging && (Math.abs(spinX) > 0.0002 || Math.abs(spinY) > 0.0002)) {
+      group.rotation.y += spinY;
+      group.rotation.x = Math.max(-1.2, Math.min(1.2, group.rotation.x + spinX));
+      spinX *= 0.93;
+      spinY *= 0.93;
+    } else if (!reduceMotion && idle > 4000 && !dragging && pointers.size === 0) {
+      group.rotation.y += 0.0011 * dt;
+    }
+    // Smooth zoom (about 120 ms to settle).
+    if (Math.abs(camera.position.z - zoomTarget) > 0.001) {
+      camera.position.z += (zoomTarget - camera.position.z) * Math.min(1, dt / 90);
+    }
     ring.lookAt(camera.position);
     renderer.render(scene, camera);
     frame = requestAnimationFrame(tick);
   };
   const wake = () => { idle = 0; };
   canvas.addEventListener("pointerdown", wake);
+  canvas.tabIndex = 0;                       // reachable with Tab, so arrows can move it
+  const onKey = (e: KeyboardEvent) => {
+    const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (step) {
+      e.preventDefault();
+      group.rotation.y += step[0] * 0.12;
+      group.rotation.x = Math.max(-1.2, Math.min(1.2, group.rotation.x + step[1] * 0.08));
+      idle = 0;
+    } else if (e.key === "+" || e.key === "=") { setZoom(zoomTarget * 0.9); }
+    else if (e.key === "-") { setZoom(zoomTarget * 1.1); }
+  };
+  canvas.addEventListener("keydown", onKey);
   frame = requestAnimationFrame(tick);
   onProgress(1);
 
   const handles: Handles = {
     reset: () => {
       group.rotation.set(0, 0, 0);
-      zoomTo(HOME_Z);
+      setZoom(HOME_Z);
+      spinX = 0; spinY = 0;
       marker.visible = false;
     },
-    nudge: (direction: number) => { group.rotation.y += direction * 0.25; },
-    zoomBy: (factor: number) => zoomTo(camera.position.z * factor),
+    nudge: (direction: number) => { spinY = direction * 0.03; },
+    zoomBy: (factor: number) => setZoom(zoomTarget * factor),
     applyLayers: (layers: Record<string, boolean>) => {
       for (const mesh of pickables) mesh.visible = layers[mesh.userData.group as string] !== false;
     },
@@ -296,6 +347,7 @@ async function buildBody(
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("pointerdown", wake);
+      canvas.removeEventListener("keydown", onKey);
       scene.traverse((node: any) => {
         node.geometry?.dispose?.();
         const material = node.material;

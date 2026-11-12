@@ -3,6 +3,7 @@ import { AdminRecovery } from "./v38";
 import { useEffect, useState } from "react";
 import { makeApi, json, API, pingServer, setApiBase, clearApiBase } from "./api";
 import { HomeHero } from "./hero";
+import { PosterStrip } from "./posters";
 import { AdSlot, setAdsHidden, useAdsHidden } from "./ads";
 import { useView } from "./viewport";
 import { ConnectionBar } from "./net";
@@ -17,6 +18,7 @@ import GuestConsultRoom from "./GuestConsultRoom";
 import TeleVisitCall from "./TeleVisitCall";
 import CommercialPanel from "./CommercialPanel";
 import { biometricLockEnabled, setBiometricLockEnabled, isNativeApp, unlockWithBiometric, checkBiometrics, biometricLabel, biometricToken, saveBiometricToken, forgetBiometricToken } from "./biometric";
+import { passkeysSupported, signInWithPasskey, passkeyEmail, rememberPasskeyEmail } from "./webauthn";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 
@@ -132,6 +134,10 @@ function MainApp() {
   const [bioBusy, setBioBusy] = useState(false);
   const [bioNote, setBioNote] = useState("");
   const [askBio, setAskBio] = useState(false);
+  // Browser fingerprint / face (WebAuthn). The Android app keeps its native prompt instead.
+  const [passkeyOk, setPasskeyOk] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  useEffect(() => { let alive = true; passkeysSupported().then((ok) => { if (alive) setPasskeyOk(ok); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     if (!nativeApp) return;
     let alive = true;
@@ -141,6 +147,23 @@ function MainApp() {
     }).catch(() => { /* no native bridge in a browser build */ });
     return () => { alive = false; };
   }, [nativeApp]);
+
+  /** Browser fingerprint / face sign-in: WebAuthn, so a PC or phone browser can do it too. */
+  async function signInWithPasskeyButton() {
+    setPasskeyBusy(true); setMessage("");
+    try {
+      const who = email.trim() || passkeyEmail();
+      if (!who) { setMessage("Type your email address first, then press the fingerprint button."); return; }
+      const d = await signInWithPasskey(api, who);
+      setToken(d.token); setUser(norm(d.user)); setPassword(""); setEmail(who);
+    } catch (x: any) {
+      // The website may still be talking to an older API build that has no passkey routes.
+      const text = String(x?.message || "");
+      setMessage(/Cannot (GET|POST)|not found|404/i.test(text)
+        ? "Fingerprint / face sign-in is not switched on for this server yet. Please use your password."
+        : text || "Fingerprint / face sign-in failed. Use your password.");
+    } finally { setPasskeyBusy(false); }
+  }
 
   /** Fingerprint / face sign-in: a successful device check unlocks the kept session. */
   async function signInWithBiometric() {
@@ -215,6 +238,7 @@ function MainApp() {
       if (mode === "register") { const r = await api("/auth/register", { method: "POST", body: json({ name, email, password }) }); setMessage(r.message); setPassword(""); if (r.needsVerification) { setStep("code"); setCode(""); } else setMode("login"); return; }
       const d = await api("/auth/login", { method: "POST", body: json({ email, password }) });
       setToken(d.token); setUser(norm(d.user)); setPassword("");
+      rememberPasskeyEmail(email);
       if (isNativeApp()) {
         if (biometricLockEnabled()) saveBiometricToken(d.token);
         else if (bio.available) setAskBio(true);
@@ -307,6 +331,10 @@ function MainApp() {
     {!user && view === "home" && <>
       <HomeHero banner={banner} signedIn={false}
         onPrimary={() => document.getElementById("portal")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+      <PosterStrip
+        onSignIn={() => document.getElementById("portal")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        onInstall={inst.canInstall ? () => inst.install() : undefined}
+      />
       <div className="home-ad"><AdSlot placement="home" variant={viewKind === "mobile" ? "wide" : "rail"} /></div>
       <div className="home-ad"><InstallCard /></div>
       <section className="auth" id="portal"><div>
@@ -318,6 +346,14 @@ function MainApp() {
             <input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} placeholder={mode === "register" ? "Password (minimum 12 characters)" : "Password"} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "register" ? 12 : 1} />
             {mode === "register" && <p className="muted">We will email a 6-digit code to verify your email address.</p>}
             <button className="primary">{mode === "login" ? "Sign in" : "Send verification code"}</button></form>
+          {mode === "login" && !nativeApp && passkeyOk && (email.trim() || passkeyEmail()) && (
+            <div className="biologin">
+              <button type="button" className="outline biobtn" disabled={passkeyBusy} onClick={signInWithPasskeyButton}>
+                {passkeyBusy ? "Waiting for fingerprint / face…" : "🔒 Sign in with fingerprint / face"}
+              </button>
+              <p className="muted small">Uses the fingerprint or face this device already has (Windows Hello, Touch ID, Android). Add it once in Settings → Security &amp; biometric.</p>
+            </div>
+          )}
           {mode === "login" && nativeApp && biometricLockEnabled() && (
             <div className="biologin">
               <button type="button" className="outline biobtn" disabled={bioBusy} onClick={signInWithBiometric}>

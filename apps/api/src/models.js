@@ -427,3 +427,22 @@ const painReportSchema = new Schema({
 painReportSchema.index({doctorId:1,status:1,createdAt:-1});
 painReportSchema.index({patientId:1,createdAt:-1});
 export const PainReport = model("PainReport",painReportSchema);
+
+
+// ================= WEBAUTHN (browser fingerprint / face sign-in) =================
+
+const webAuthnCredentialSchema = new Schema({
+  userId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  // base64url of the raw credential id; unique because a credential belongs to one account.
+  credentialId:{type:String,required:true,unique:true},
+  // base64url of the COSE public key. The private key never leaves the device.
+  publicKey:{type:String,required:true},
+  counter:{type:Number,default:0},
+  transports:[String],
+  deviceType:{type:String,default:""},
+  backedUp:{type:Boolean,default:false},
+  label:{type:String,default:"This device",maxlength:60},
+  lastUsedAt:Date
+},{timestamps:true});
+webAuthnCredentialSchema.index({userId:1,createdAt:-1});
+export const WebAuthnCredential = model("WebAuthnCredential",webAuthnCredentialSchema);
