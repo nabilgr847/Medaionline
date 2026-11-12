@@ -91,3 +91,55 @@ test("without WebGL the card still explains the organ", () => {
   assert.match(anatomy, /anatomy-fallback/);
   assert.match(anatomy, /not for diagnosis|learning only/);
 });
+
+/* ---------- 3D anatomy: six organs, labels, quiz ---------- */
+
+// Parse the ORGANS array straight out of the component so the content itself is checked.
+const organsBlock = anatomy.slice(anatomy.indexOf("const ORGANS"), anatomy.indexOf("const WIFI_KEY"));
+const organIds = [...organsBlock.matchAll(/id: "(heart|lungs|brain|kidney|eye|spine)"/g)].map((m) => m[1]);
+
+test("six organs are offered, including kidney, eye and spine", () => {
+  assert.deepEqual(organIds, ["heart", "lungs", "brain", "kidney", "eye", "spine"]);
+});
+
+test("every organ has labels with a note", () => {
+  const hotspots = [...organsBlock.matchAll(/hotspots: \[([\s\S]*?)\],\s*quiz:/g)];
+  assert.equal(hotspots.length, 6, "each organ needs a hotspot list");
+  for (const [, block] of hotspots) {
+    const names = [...block.matchAll(/name: "([^"]+)"/g)];
+    const notes = [...block.matchAll(/note: "([^"]+)"/g)];
+    assert.ok(names.length >= 3, "at least three labels per organ");
+    assert.equal(names.length, notes.length, "every label needs an explanation");
+    for (const [, note] of notes) assert.ok(note.length > 20, `note too short: ${note}`);
+  }
+});
+
+test("every quiz answer points at a real option", () => {
+  const questions = [...organsBlock.matchAll(/\{ q: "([^"]+)", options: \[([^\]]+)\], answer: (\d+), why: "([^"]+)" \}/g)];
+  assert.ok(questions.length >= 24, `only ${questions.length} questions found`);
+  for (const [, q, optionsRaw, answer, why] of questions) {
+    const options = optionsRaw.split('", "').map((o) => o.replace(/^"|"$/g, ""));
+    const index = Number(answer);
+    assert.ok(index >= 0 && index < options.length, `"${q}" has an out-of-range answer`);
+    assert.ok(why.length > 20, `"${q}" needs an explanation`);
+  }
+});
+
+test("the quiz is reachable from the card and remembers the best score", () => {
+  assert.match(anatomy, /Take the quiz/);
+  assert.match(anatomy, /medai_anatomy_best/);
+  assert.match(anatomy, /Quiz finished/);
+});
+
+test("labels can be switched off, and are dots only on a phone", () => {
+  assert.match(anatomy, /Show labels/);
+  assert.match(anatomy, /setLabelsVisible/);
+  const css = read("apps/web/src/components.css");
+  assert.match(css, /\.anatomy-hotspot/);
+  assert.match(css, /max-width:767px\)\{[\s\S]*\.anatomy-hotspot span\{ display:none/);
+});
+
+test("hotspots on the far side of the model are hidden", () => {
+  assert.match(anatomy, /facingCamera/);
+  assert.match(anatomy, /dot\(toCamera\)/);
+});
