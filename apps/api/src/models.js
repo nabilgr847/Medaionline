@@ -47,6 +47,8 @@ const appointmentSchema = new Schema({
   preferredAt:Date,
   proposal:{at:Date,note:{type:String,maxlength:500},proposedAt:Date,status:{type:String,enum:["pending","accepted","declined"]}},
   pastDiseases:{type:String,default:"",maxlength:2000}, pastInfo:{type:String,default:"",maxlength:4000},
+  // Spot the patient marked on the 3D body while booking (optional).
+  painSite:{name:{type:String,maxlength:160}, partId:Number, system:{type:String,maxlength:40}, severity:{type:Number,min:1,max:10}},
   recordingConsent:{patientAt:{type:Date,default:null},doctorAt:{type:Date,default:null}}
 }, {timestamps:true});
 

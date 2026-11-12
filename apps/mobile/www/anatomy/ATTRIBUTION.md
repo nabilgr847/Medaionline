@@ -1,6 +1,6 @@
 # 3D anatomy model — attribution
 
-The models in this folder (`body.glb`, `muscles.glb`, `vessels.glb`) are derived from
+The model in this folder (`body.glb` — the whole body in one file) is derived from
 **BodyParts3D 4.0**:
 
 > BodyParts3D, © The Database Center for Life Science, licensed under
@@ -13,9 +13,9 @@ The models in this folder (`body.glb`, `muscles.glb`, `vessels.glb`) are derived
   concepts*, <https://doi.org/10.1093/nar/gkn613>
 
 ## Changes made for MedAI Hospital
-- Split the body into three layers: bones + organs (always), muscles and blood vessels
-  (optional, downloaded only when the patient switches them on). Skin, connective tissue
-  and most nerves were removed; the nervous system keeps the brain and spinal cord.
+- Combined bones, organs, muscles and blood vessels into one file so the patient sees one
+  whole body. Skin, connective tissue and most nerves were removed; the nervous system keeps
+  the brain and spinal cord.
 - Simplified every heavy mesh with meshoptimizer and dropped the tiny parts that no one can
   point at on a phone screen.
 - Colours are per-system materials, not per-vertex colours (smaller file, sharper look).

@@ -426,14 +426,16 @@ router.delete("/files/:id",auth,wrap(async(req,res)=>{
 }));
 
 router.post("/appointments",auth,allow("patient"),wrap(async(req,res)=>{
-  const s=z.object({problem:z.string().min(5).max(4000),doctorId:z.string().optional(),consultationType:z.enum(["online","in_person"]).default("online"),preferredAt:z.string().datetime().optional(),pastDiseases:z.string().max(2000).optional(),pastInfo:z.string().max(4000).optional()}).safeParse(req.body);
+  const s=z.object({problem:z.string().min(5).max(4000),doctorId:z.string().optional(),consultationType:z.enum(["online","in_person"]).default("online"),preferredAt:z.string().datetime().optional(),pastDiseases:z.string().max(2000).optional(),pastInfo:z.string().max(4000).optional(),
+    painSite:z.object({name:z.string().min(2).max(160),partId:z.number().int().min(0).optional(),system:z.string().max(40).optional(),severity:z.number().int().min(1).max(10)}).optional()}).safeParse(req.body);
   if(!s.success) return res.status(400).json({error:"Please describe the reason for appointment"});
   let preferredAt=null;
   if(s.data.preferredAt){if(!s.data.doctorId)return res.status(400).json({error:"Choose a doctor to pick a time slot"});const pd=await User.findOne({_id:s.data.doctorId,role:"doctor",status:"active"});if(!pd)return res.status(400).json({error:"Selected doctor is unavailable"});const why=await slotIsFree(pd,new Date(s.data.preferredAt));if(why)return res.status(409).json({error:why});preferredAt=new Date(s.data.preferredAt);}
   if(s.data.doctorId && !await User.findOne({_id:s.data.doctorId,role:"doctor",status:"active"})) return res.status(400).json({error:"Selected doctor is unavailable"});
   const pastDiseases=String(s.data.pastDiseases||"").trim();
   const pastInfo=String(s.data.pastInfo||"").trim();
-  const appt=await Appointment.create({patientId:req.user.id,doctorId:s.data.doctorId||null,problem:s.data.problem,consultationType:s.data.consultationType,preferredAt,pastDiseases,pastInfo});
+  const painSite=s.data.painSite?{name:s.data.painSite.name.trim(),partId:s.data.painSite.partId??null,system:String(s.data.painSite.system||"").slice(0,40),severity:s.data.painSite.severity}:undefined;
+  const appt=await Appointment.create({patientId:req.user.id,doctorId:s.data.doctorId||null,problem:s.data.problem,consultationType:s.data.consultationType,preferredAt,pastDiseases,pastInfo,...(painSite?{painSite}:{})});
   // Merge past diseases into health profile history when provided
   if(pastDiseases||pastInfo){
     const u=await User.findById(req.user.id).select("medicalHistory");
@@ -444,7 +446,7 @@ router.post("/appointments",auth,allow("patient"),wrap(async(req,res)=>{
     }
   }
   await audit(req,"appointment.requested","Appointment",appt.id);
-  if(appt.doctorId) await notify(appt.doctorId,"appointment_requested","New appointment request",`${req.user.name} requested an appointment${appt.preferredAt?" for "+appt.preferredAt.toISOString():""}. Open New requests to respond.`,"Appointment",appt.id);
+  if(appt.doctorId) await notify(appt.doctorId,"appointment_requested","New appointment request",`${req.user.name} requested an appointment${appt.preferredAt?" for "+appt.preferredAt.toISOString():""}${painSite?` — pain marked at "${painSite.name}" (${painSite.severity}/10)`:""}. Open New requests to respond.`,"Appointment",appt.id);
   res.status(201).json({appointment:appt});
 }));
 router.get("/appointments",auth,wrap(async(req,res)=>{
