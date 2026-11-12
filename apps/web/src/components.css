@@ -806,3 +806,57 @@ footer .emergency a{ color:#b91c1c; font-weight:700; text-decoration:none; }
   .anatomy-canvas{ height:260px; }
   .anatomy-stage{ min-height:260px; }
 }
+
+/* ---- 3D anatomy: hotspots, notes, quiz ---- */
+.anatomy-overlay{ position:absolute; inset:0; pointer-events:none; }
+.anatomy-hotspot{
+  position:absolute; transform:translate(-50%,-50%); pointer-events:auto;
+  display:flex; align-items:center; gap:6px;
+  background:rgba(15,23,42,.82); color:#fff; border:0; border-radius:999px;
+  padding:5px 10px 5px 8px; font-size:11.5px; font-weight:700; line-height:1;
+  min-height:32px; box-shadow:0 6px 16px rgba(2,6,23,.28); cursor:pointer;
+  white-space:nowrap;
+}
+.anatomy-hotspot i{
+  width:9px; height:9px; border-radius:50%; background:#38bdf8;
+  box-shadow:0 0 0 3px rgba(56,189,248,.35); flex:0 0 9px;
+}
+.anatomy-hotspot:hover{ background:#0b5ed6; }
+.anatomy-hotspot:focus-visible{ outline:2px solid #fff; outline-offset:2px; }
+
+.anatomy-tools{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:10px; }
+.anatomy-tools .check{ font-size:12.5px; color:var(--muted); }
+
+.anatomy-note{
+  margin-top:12px; padding:12px 14px; border-radius:12px;
+  background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a;
+}
+.anatomy-note b{ font-size:13.5px; }
+.anatomy-note p{ margin:4px 0 6px; font-size:12.5px; line-height:1.6; color:#334155; }
+.anatomy-note .link{ font-size:12px; }
+
+.anatomy-actions{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:12px; }
+.anatomy-actions .outline{ min-height:40px; }
+
+.anatomy-quiz{ margin-top:14px; border:1px solid var(--line); border-radius:14px; padding:14px; background:#fbfdff; }
+.anatomy-quiz-top{ display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--muted); margin-bottom:6px; }
+.anatomy-question{ margin:0 0 10px; font-size:14px; font-weight:600; color:var(--ink); line-height:1.5; }
+.anatomy-options{ display:grid; gap:8px; }
+.anatomy-options button{
+  text-align:left; padding:10px 12px; min-height:44px; border-radius:10px;
+  border:1px solid var(--line); background:#fff; color:#1e293b; font-size:13px; font-weight:500;
+}
+.anatomy-options button:hover:not(:disabled){ border-color:var(--brand); }
+.anatomy-options button.correct{ background:#dcfce7; border-color:#86efac; color:#14532d; font-weight:700; }
+.anatomy-options button.wrong{ background:#fee2e2; border-color:#fca5a5; color:#7f1d1d; }
+.anatomy-options button.dim{ opacity:.55; }
+.anatomy-why{ margin-top:12px; font-size:12.5px; color:#334155; line-height:1.65; }
+.anatomy-why b{ color:var(--ink); }
+.anatomy-why .primary{ display:block; margin-top:10px; min-height:40px; }
+
+@media (max-width:767px){
+  .anatomy-hotspot{ font-size:11px; padding:4px 8px 4px 7px; }
+  .anatomy-hotspot span{ display:none; }          /* dots only on a phone; tap shows the note */
+  .anatomy-hotspot{ padding:0; width:44px; height:44px; justify-content:center; }
+  .anatomy-hotspot i{ width:12px; height:12px; flex:0 0 12px; }
+}
