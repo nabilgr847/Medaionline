@@ -64,6 +64,9 @@ signing = (
     "    signingConfigs {\n        medai {\n"
     '            storeFile file("../../medai-release.jks")\n'
     '            storePassword "medaiapp2026"\n            keyAlias "medai"\n            keyPassword "medaiapp2026"\n'
+    # v1 (JAR) is what Android 6 uses to verify an APK; v2/v3 are used by newer versions.
+    # Leaving any of them to chance is how a phone ends up saying "invalid package".
+    "            enableV1Signing true\n            enableV2Signing true\n            enableV3Signing true\n"
     "        }\n    }\n"
 )
 if "signingConfigs.medai" not in g:
@@ -76,6 +79,22 @@ if "release {" in g and "signingConfig signingConfigs.medai" not in g.split("rel
     g = head + "release {\n            signingConfig signingConfigs.medai" + tail
 gradle.write_text(g)
 print(f"Signing key fixed; versionCode {300000 + run}.")
+
+# ---- packaging: extract native libraries + legacy packaging ----
+props = android / "gradle.properties"
+ptext = props.read_text() if props.exists() else ""
+for line in ("android.useLegacyPackaging=true",):
+    if line not in ptext:
+        ptext = ptext.rstrip("\n") + "\n" + line + "\n"
+props.write_text(ptext)
+print("gradle.properties: legacy packaging enabled.")
+
+manifest_text = manifest.read_text()
+if 'android:extractNativeLibs' not in manifest_text:
+    # Capacitor puts android: allowsBackup on <application>; append our attribute there.
+    manifest_text = manifest_text.replace("<application", '<application android:extractNativeLibs="true"', 1)
+    manifest.write_text(manifest_text)
+    print("Manifest: extractNativeLibs=true (older installers need it).")
 
 # ---- native bridge: downloads + print ----
 tpl = (mobile / "native/MainActivity.java.tpl").read_text()
