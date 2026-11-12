@@ -25,6 +25,19 @@ createRoot(document.getElementById("root")!).render(<React.StrictMode><ErrorBoun
 // --- Native (Capacitor Android) integrations: push notifications + auto-lock ---
 const cap = (window as any).Capacitor;
 
+/**
+ * Capacitor's `addListener` returns a Promise in some plugin versions and a plain handle in
+ * others. Calling `.catch` on the handle threw "l.addListener(...).catch is not a function"
+ * and took the whole native bootstrap down with it, so every call goes through here.
+ */
+function listen(plugin: any, event: string, handler: (data: any) => void) {
+  try {
+    const result = plugin?.addListener?.(event, handler);
+    if (result && typeof result.catch === "function") result.catch(() => {});
+    return result;
+  } catch { return null; }
+}
+
 if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform()) {
   const plugins = cap.Plugins || {};
 
@@ -32,7 +45,7 @@ if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform())
   // Android project; without it registration fails harmlessly.
   const PushNotifications = plugins.PushNotifications;
   if (PushNotifications) {
-    PushNotifications.addListener("registration", (token: any) => {
+    listen(PushNotifications, "registration", (token: any) => {
       const token2 = localStorage.getItem("medai_token") || "";
       if (!token2 || !token?.value) return;
       fetch(String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "") + "/api/commercial/push/register", {
@@ -40,8 +53,8 @@ if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform())
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token2 },
         body: JSON.stringify({ token: token.value }),
       }).catch(() => {});
-    }).catch(() => {});
-    PushNotifications.addListener("registrationError", (e: any) => console.warn("Push registration error:", e)).catch(() => {});
+    });
+    listen(PushNotifications, "registrationError", (e: any) => console.warn("Push registration error:", e));
     PushNotifications.requestPermissions()
       .then((r: any) => { if (r && r.receive === "granted") return PushNotifications.register(); })
       .catch(() => {});
@@ -52,8 +65,8 @@ if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform())
   const App = plugins.App;
   const LOCK_AFTER_MS = 2 * 60 * 1000;
   let hiddenAt = 0;
-  if (App && App.addListener) {
-    App.addListener("appStateChange", (state: any) => {
+  if (App) {
+    listen(App, "appStateChange", (state: any) => {
       if (!state || !state.isActive) { hiddenAt = Date.now(); return; }
       if (!hiddenAt) return;
       const away = Date.now() - hiddenAt;
@@ -61,6 +74,6 @@ if (cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform())
       const wantsLock = localStorage.getItem("medai_biometric_lock") === "1";
       const hasSession = !!localStorage.getItem("medai_token");
       if (wantsLock && hasSession && away > LOCK_AFTER_MS) window.location.reload();
-    }).catch(() => {});
+    });
   }
 }
