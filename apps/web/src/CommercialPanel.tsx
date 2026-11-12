@@ -6,6 +6,7 @@ import { makeApi, json, fmtDate, fmtSize, API } from "./api";
 import { Tabs } from "./common";
 import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled, biometricLabel, saveBiometricToken } from "./biometric";
 import { pingServer, setApiBase, clearApiBase } from "./api";
+import { syncReminders, remindersEnabled, setRemindersEnabled, requestNotifyPermission, notifySupported, stopInPageChecker } from "./notify";
 
 type Role = "patient" | "doctor" | "admin";
 
@@ -81,6 +82,9 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
     return () => { alive = false; };
   }, []);
 
+  const [notifyState, setNotifyState] = useState<{ on: boolean; note: string; count: number }>({ on: false, note: "", count: 0 });
+  const [notifyBusy, setNotifyBusy] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
@@ -109,6 +113,19 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
   }, [api]);
 
   useEffect(() => { load(); }, [api, load]);
+
+  // Every time the reminder list changes, re-schedule (or re-arm the in-page checker).
+  useEffect(() => {
+    if (!notifySupported()) return;
+    const on = remindersEnabled();
+    if (!on || reminders.length === 0) { setNotifyState((s) => ({ ...s, on })); return; }
+    let alive = true;
+    syncReminders(reminders).then((r) => {
+      if (!alive) return;
+      setNotifyState({ on, note: r.message, count: r.scheduled });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [reminders]);
 
   // ---------- Subscribe ----------
   const subscribe = async (planId: string, cycle: "monthly" | "yearly") => {
@@ -141,7 +158,7 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
     setLoading(true); setErr("");
     try {
       const d = await api("/commercial/2fa/setup", { method: "POST", body: json({}) });
-      setForm({ step: "verify", secret: d.secret, otpauth: d.otpauth, backupCodes: d.backupCodes });
+      setForm({ step: "verify", secret: d.secret, otpauth: d.otpauth, qr: d.qr, manualEntry: d.manualEntry || d.secret, backupCodes: d.backupCodes });
     } catch (e: any) { setErr(e.message || "2FA setup failed"); }
     finally { setLoading(false); }
   };
@@ -155,11 +172,16 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
     } catch (e: any) { setErr(e.message || "Invalid code"); }
     finally { setLoading(false); }
   };
-  const disable2fa = async () => {
-    if (!window.confirm("Disable two-factor authentication?")) return;
+  /** Turning 2FA off needs a current code or a backup code, otherwise a stolen session could. */
+  const disable2fa = async (code: string) => {
+    if (!code.trim()) { setErr("Enter the current 6-digit code (or a backup code) to turn 2FA off."); return; }
     setLoading(true); setErr("");
     try {
-      await api("/commercial/2fa/disable", { method: "POST", body: json({}) });
+      const looksLikeBackup = /^[0-9A-Fa-f]{5}-[0-9A-Fa-f]{5}$/.test(code.trim());
+      await api("/commercial/2fa/disable", {
+        method: "POST",
+        body: json(looksLikeBackup ? { backupCode: code.trim() } : { token: code.trim() }),
+      });
       setMsg("2FA disabled.");
       setForm({ step: null }); await load();
     } catch (e: any) { setErr(e.message || "Could not disable"); }
@@ -351,7 +373,13 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 <span style={{ fontWeight: "bold" }}>2FA is active</span>{statusBadge("active")}
               </div>
               <div style={{ fontSize: 13, color: "#64748b" }}>Verified: {fmtDate(tfa.verifiedAt || "")}</div>
-              <button onClick={disable2fa} style={{ marginTop: 12, padding: 8, border: "1px solid #dc2626", borderRadius: 6, background: "#fff", color: "#dc2626", cursor: "pointer" }}>Disable 2FA</button>
+              <div style={{ marginTop: 14, padding: 12, background: "#f8fafc", borderRadius: 8 }}>
+                <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>To turn 2FA off, enter the current code from your authenticator app (or one backup code).</div>
+                <div className="row">
+                  <input type="text" inputMode="numeric" maxLength={11} placeholder="6-digit code" value={form.code || ""} onChange={(e) => setForm({ ...form, code: e.target.value })} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, width: 150 }} />
+                  <button onClick={() => disable2fa(form.code || "")} disabled={loading} style={{ padding: 8, border: "1px solid #dc2626", borderRadius: 6, background: "#fff", color: "#dc2626", cursor: "pointer" }}>Disable 2FA</button>
+                </div>
+              </div>
             </div>
           ) : (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, background: "#fff" }}>
@@ -359,15 +387,19 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
               {form.step === "verify" && (
                 <div style={{ marginTop: 12, padding: 12, background: "#fff6e0", borderRadius: 8, fontSize: 12 }}>
                   <div style={{ fontWeight: "bold", marginBottom: 6 }}>Secret key: <span style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{form.secret}</span></div>
-                  <div style={{ fontWeight: "bold", marginTop: 6, marginBottom: 4 }}>Scan this QR or enter the setup key:</div>
+                  <div style={{ fontWeight: "bold", marginTop: 6, marginBottom: 4 }}>1. Scan this QR in Google Authenticator / Authy</div>
                   <div style={{ marginTop: 6 }}>
-                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(form.otpauth)}`} alt="2FA QR" style={{ width: 160, height: 160, border: "1px solid #ddd", borderRadius: 6 }} />
+                    {form.qr
+                      ? <img src={form.qr} alt="2FA QR code" style={{ width: 180, height: 180, border: "1px solid #ddd", borderRadius: 6, background: "#fff" }} />
+                      : <div style={{ fontFamily: "monospace", wordBreak: "break-all", background: "#fff", padding: 8, borderRadius: 6 }}>{form.manualEntry || form.secret}</div>}
                   </div>
+                  <div style={{ marginTop: 6, fontSize: 11, color: "#64748b" }}>Cannot scan? Type this key into the app: <b style={{ fontFamily: "monospace" }}>{form.manualEntry || form.secret}</b></div>
                   <div style={{ marginTop: 10 }}>
                     <strong>Backup codes (save these):</strong> {form.backupCodes.map((c: string, i: number) => <span key={i} style={{ marginRight: 8, fontFamily: "monospace", background: "#eee", padding: "2px 6px", borderRadius: 4 }}>{c}</span>)}
                   </div>
                   <div style={{ marginTop: 10 }}>
-                    <input type="text" maxLength={6} onChange={(e) => setForm({...form, code: e.target.value})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, width: 100 }} placeholder="6-digit code" />
+                    <div style={{ fontWeight: "bold", margin: "10px 0 6px" }}>2. Enter the 6-digit code it shows</div>
+                    <input type="text" inputMode="numeric" maxLength={6} value={form.code || ""} onChange={(e) => setForm({...form, code: e.target.value})} style={{ padding: 8, border: "1px solid #e2e8f0", borderRadius: 6, width: 120 }} placeholder="6-digit code" />
                     <button onClick={() => verify2fa(form.code || "")} style={{ marginLeft: 8, padding: 8, border: "none", borderRadius: 6, background: "#0b5ed6", color: "#fff", cursor: "pointer" }}>Verify &amp; enable</button>
                   </div>
                 </div>
@@ -434,6 +466,47 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Phone notifications */}
+          <div style={{ border:"1px solid #e2e8f0",borderRadius:16,padding:16,background:"#fff",marginBottom:16,boxShadow:"var(--shadow-sm)" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+              <div>
+                <h4 style={{ fontSize:14, margin:0, color:"#0f172a" }}>🔔 Reminder notifications</h4>
+                <div style={{ fontSize:12.5, color:"#64748b", marginTop:4, maxWidth:"52ch", lineHeight:1.6 }}>
+                  {notifyState.on
+                    ? (notifyState.note || "Reminders are on.")
+                    : "Get a notification at each dose time, with a tap to log it as taken or skipped."}
+                </div>
+              </div>
+              <div className="row">
+                {notifyState.on ? (
+                  <>
+                    <button className="outline" disabled={notifyBusy} onClick={async () => {
+                      setNotifyBusy(true);
+                      const r = await syncReminders(reminders);
+                      setNotifyState({ on: true, note: r.message, count: r.scheduled });
+                      setNotifyBusy(false);
+                    }}>{notifyBusy ? "Working…" : "Reschedule"}</button>
+                    <button className="link" onClick={() => { setRemindersEnabled(false); stopInPageChecker(); setNotifyState({ on: false, note: "", count: 0 }); setMsg("Reminder notifications turned off."); }}>Turn off</button>
+                  </>
+                ) : (
+                  <button className="primary" disabled={notifyBusy} onClick={async () => {
+                    setNotifyBusy(true); setErr("");
+                    const p = await requestNotifyPermission();
+                    if (!p.ok) { setErr(p.message); setNotifyBusy(false); return; }
+                    setRemindersEnabled(true);
+                    const r = await syncReminders(reminders);
+                    setNotifyState({ on: true, note: p.message + " " + r.message, count: r.scheduled });
+                    setMsg(p.message);
+                    setNotifyBusy(false);
+                  }}>{notifyBusy ? "Asking…" : "Turn on reminders"}</button>
+                )}
+              </div>
+            </div>
+            <div style={{ fontSize:11.5, color:"#94a3b8", marginTop:8 }}>
+              In the Android app the reminder still arrives when the app is closed. In a browser tab it only fires while MedAI is open — install the app for real alarms.
+            </div>
           </div>
 
           {/* Add reminder form */}

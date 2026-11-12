@@ -5,6 +5,8 @@
 import express from "express";
 import { z } from "zod";
 import crypto from "crypto";
+import QRCode from "qrcode";
+import { generateSecret, generateBackupCodes, hashCode, verifyTotp, otpauthUrl } from "./totp.js";
 import { Payment, SubscriptionPlan, UserSubscription, Invoice, SMSMessage, TwoFactorAuth, DataExportRequest, DoctorAvailability, PharmacyOrder, LabOrder, MedicineReminder, MedicineIntakeLog, User, Appointment, MedicalReport, Prescription, PrivateFile, AuditEvent } from "./models.js";
 import { auth, allow, audit } from "./security.js";
 import { config } from "./config.js";
@@ -180,44 +182,69 @@ router.get("/sms/mine", auth, wrap(async (req, res) => {
 
 // ---------- 2FA ----------
 router.post("/2fa/setup", auth, wrap(async (req, res) => {
-  // Generate TOTP secret (base32). In production verify with speakeasy/qrcode.
-  const secret = crypto.randomBytes(20).toString("base32").slice(0, 32);
-  const backupCodes = Array.from({ length: 8 }, () => crypto.randomBytes(4).toString("hex"));
-  let tfa = await TwoFactorAuth.findOne({ userId: req.user.id });
+  // Real base32 secret (Node has no "base32" encoding - that crash was the whole bug).
+  const secret = generateSecret();
+  const backupCodes = generateBackupCodes();
+  let tfa = await TwoFactorAuth.findOne({ userId: req.user.id }).select("+secret +backupCodes");
   if (tfa) {
-    tfa.secret = secret; tfa.backupCodes = backupCodes; tfa.enabled = false; tfa.verifiedAt = null;
+    tfa.secret = secret;
+    tfa.backupCodes = backupCodes.map(hashCode);   // never store a usable code
+    tfa.enabled = false; tfa.verifiedAt = null; tfa.lastStep = 0;
     await tfa.save();
   } else {
-    tfa = await TwoFactorAuth.create({ userId: req.user.id, secret, backupCodes, enabled: false });
+    tfa = await TwoFactorAuth.create({ userId: req.user.id, secret, backupCodes: backupCodes.map(hashCode), enabled: false, lastStep: 0 });
   }
-  // Return secret + QR otpauth URL so frontend can render QR code
-  const issuer = encodeURIComponent("MedAI Hospital");
-  const account = encodeURIComponent(req.user.email);
-  const otpauth = `otpauth://totp/${issuer}:${account}?secret=${secret}&issuer=${issuer}`;
+  const otpauth = otpauthUrl({ secret, account: req.user.email });
+  // Drawn on the server: the secret must never be sent to a third-party QR service.
+  const qr = await QRCode.toDataURL(otpauth, { margin: 1, width: 240 }).catch(() => "");
   await audit(req, "commercial.2fa.setup", "TwoFactorAuth", tfa.id);
-  res.json({ secret, otpauth, backupCodes });
+  // The plain codes are shown exactly once, then only their hashes exist.
+  res.json({ secret, otpauth, qr, backupCodes, manualEntry: secret.match(/.{1,4}/g).join(" ") });
 }));
 
 router.post("/2fa/verify", auth, wrap(async (req, res) => {
-  const body = z.object({ token: z.string().length(6), backupCode: z.string().optional() }).parse(req.body);
-  const tfa = await TwoFactorAuth.findOne({ userId: req.user.id });
-  if (!tfa) throw Object.assign(new Error("2FA not set up"), { status: 400 });
+  const body = z.object({
+    token: z.string().trim().optional(),
+    backupCode: z.string().trim().optional(),
+  }).parse(req.body);
+  if (!body.token && !body.backupCode) throw Object.assign(new Error("Enter the 6-digit code from your authenticator app"), { status: 400 });
+  const tfa = await TwoFactorAuth.findOne({ userId: req.user.id }).select("+secret +backupCodes");
+  if (!tfa) throw Object.assign(new Error("Set up two-factor authentication first"), { status: 400 });
+
   let ok = false;
   if (body.token) {
-    // Simple TOTP check placeholder — frontend should verify with speakeasy; here we accept any 6-digit for MVP and mark verified.
-    ok = /^\d{6}$/.test(body.token);
+    const result = verifyTotp(tfa.secret, body.token, { lastStep: tfa.lastStep || 0 });
+    ok = result.ok;
+    if (ok) tfa.lastStep = result.step;             // the same code can never be used twice
   } else if (body.backupCode) {
-    ok = tfa.backupCodes.includes(body.backupCode);
-    if (ok) tfa.backupCodes = tfa.backupCodes.filter(c => c !== body.backupCode);
+    const given = hashCode(body.backupCode);
+    const remaining = [];
+    for (const stored of tfa.backupCodes || []) {
+      if (!ok && stored === given) { ok = true; continue; }   // burn the used code
+      remaining.push(stored);
+    }
+    tfa.backupCodes = remaining;
   }
-  if (!ok) throw Object.assign(new Error("Invalid verification code"), { status: 400 });
-  tfa.enabled = true; tfa.verifiedAt = new Date(); await tfa.save();
+  if (!ok) {
+    await audit(req, "commercial.2fa.failed", "TwoFactorAuth", tfa.id);
+    throw Object.assign(new Error("That code is not valid. Codes change every 30 seconds - try the current one."), { status: 400 });
+  }
+  tfa.enabled = true; tfa.verifiedAt = new Date();
+  await tfa.save();
   await audit(req, "commercial.2fa.verified", "TwoFactorAuth", tfa.id);
-  res.json({ enabled: true });
+  res.json({ enabled: true, backupCodesLeft: (tfa.backupCodes || []).length });
 }));
 
 router.post("/2fa/disable", auth, wrap(async (req, res) => {
-  await TwoFactorAuth.findOneAndDelete({ userId: req.user.id });
+  // Without a code, anyone who steals a session could simply switch 2FA off.
+  const body = z.object({ token: z.string().trim().optional(), backupCode: z.string().trim().optional() }).parse(req.body || {});
+  const tfa = await TwoFactorAuth.findOne({ userId: req.user.id }).select("+secret +backupCodes");
+  if (!tfa) return res.json({ ok: true, message: "Two-factor authentication was not enabled." });
+  let ok = false;
+  if (body.token) ok = verifyTotp(tfa.secret, body.token, { lastStep: tfa.lastStep || 0 }).ok;
+  if (!ok && body.backupCode) ok = (tfa.backupCodes || []).includes(hashCode(body.backupCode));
+  if (!ok) throw Object.assign(new Error("Enter a current code or a backup code to turn 2FA off"), { status: 400 });
+  await TwoFactorAuth.deleteOne({ _id: tfa._id });
   await audit(req, "commercial.2fa.disabled", "TwoFactorAuth", req.user.id);
   res.json({ ok: true });
 }));

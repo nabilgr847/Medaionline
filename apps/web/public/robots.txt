@@ -1,0 +1,14 @@
+# MedAI Hospital
+# Only the public pages are useful to search engines. Everything behind a session, and the
+# one-time links (guest room, call, password recovery), must stay out of the index.
+User-agent: *
+Allow: /
+Allow: /get-app.html
+Disallow: /?debug
+Disallow: /?consult
+Disallow: /?call=
+Disallow: /?recovery
+Disallow: /reset-password
+Disallow: /api/
+
+Sitemap: https://medaionline-1.onrender.com/sitemap.xml

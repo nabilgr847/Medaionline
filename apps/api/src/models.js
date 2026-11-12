@@ -327,7 +327,8 @@ const twoFactorSchema = new Schema({
   userId:{type:Schema.Types.ObjectId,ref:"User",required:true,unique:true,index:true},
   enabled:{type:Boolean,default:false},
   secret:{type:String,select:false},
-  backupCodes:[{type:String,select:false}],
+  backupCodes:[{type:String,select:false}],   // sha256 hashes, never the usable code
+  lastStep:{type:Number,default:0},           // last accepted TOTP step (blocks replay)
   verifiedAt:{type:Date}
 },{timestamps:true});
 export const TwoFactorAuth = model("TwoFactorAuth",twoFactorSchema);
