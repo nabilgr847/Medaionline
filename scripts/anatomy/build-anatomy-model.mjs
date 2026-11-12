@@ -8,14 +8,13 @@
 //
 // What this script does:
 //   1. downloads the prepared pack (atlas.json + gzipped chunks) once, into a cache folder
-//   2. keeps the systems a patient can point at: skeleton + organs (always), plus muscles
-//      and blood vessels as OPTIONAL layers that only download when they are switched on
+//   2. keeps the whole body a patient can point at: skeleton, organs, muscles, blood vessels
 //   3. simplifies every heavy mesh with meshoptimizer (harder for muscles/vessels)
 //   4. writes one glb per layer + one small JSON that maps a picked vertex back to an
 //      anatomical name (part ids are global across all layers)
 //
 // Run:  node scripts/anatomy/build-anatomy-model.mjs
-// Out:  apps/web/public/anatomy/{body,muscles,vessels}.glb, body.parts.json, ATTRIBUTION.md
+// Out:  apps/web/public/anatomy/body.glb, body.parts.json, ATTRIBUTION.md
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { createReadStream } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -35,12 +34,16 @@ const requireFromWeb = createRequire(join(repo, "apps/web/package.json"));
 const meshoptimizerPath = requireFromWeb.resolve("meshoptimizer");
 const { MeshoptSimplifier } = await import(pathToFileURL(meshoptimizerPath).href);
 
-// One is small enough to open immediately; the other two are optional and lazy-loaded,
-// because muscles and vessels alone are 1.3 million source triangles.
+// ONE complete body: bones + organs + muscles + blood vessels in a single file.
+// Splitting it into layers saved bandwidth, but the patient could not see one whole body,
+// and a pain map has to show the body the person is looking at. One file, one download.
 const LAYERS = [
-  { file: "body.glb", layer: "body", title: "bones + organs", systems: ["skeletal", "cardiac", "respiratory", "digestive", "urinary", "endocrine", "reproductive", "sensory", "nervous"] },
-  { file: "muscles.glb", layer: "muscles", title: "muscles", systems: ["muscular"] },
-  { file: "vessels.glb", layer: "vessels", title: "blood vessels", systems: ["arterial", "venous"] },
+  {
+    file: "body.glb",
+    layer: "body",
+    title: "full body",
+    systems: ["skeletal", "cardiac", "respiratory", "digestive", "urinary", "endocrine", "reproductive", "sensory", "nervous", "muscular", "arterial", "venous"],
+  },
 ];
 const KEEP_NERVOUS = /brain|spinal cord/i;
 /** Muscles and vessels are mostly smooth tubes: they survive far harder simplification. */
@@ -322,11 +325,13 @@ async function main() {
     files,
     parts: allParts,
   }));
+  // Layers from V3.14 are gone: remove them so an old copy cannot be served by the PWA cache.
+  for (const stale of ["muscles.glb", "vessels.glb"]) rmSync(join(outDir, stale), { force: true });
   console.log(`total: ${(files.reduce((sum, f) => sum + f.bytes, 0) / 1048576).toFixed(2)} MB, ${totalTriangles} triangles from ${sourceTriangles}, ${allParts.length} parts`);
 
   writeFileSync(join(outDir, "ATTRIBUTION.md"), `# 3D anatomy model — attribution
 
-The models in this folder (\`body.glb\`, \`muscles.glb\`, \`vessels.glb\`) are derived from
+The model in this folder (\`body.glb\` — the whole body in one file) is derived from
 **BodyParts3D 4.0**:
 
 > BodyParts3D, © The Database Center for Life Science, licensed under
@@ -339,9 +344,9 @@ The models in this folder (\`body.glb\`, \`muscles.glb\`, \`vessels.glb\`) are d
   concepts*, <https://doi.org/10.1093/nar/gkn613>
 
 ## Changes made for MedAI Hospital
-- Split the body into three layers: bones + organs (always), muscles and blood vessels
-  (optional, downloaded only when the patient switches them on). Skin, connective tissue
-  and most nerves were removed; the nervous system keeps the brain and spinal cord.
+- Combined bones, organs, muscles and blood vessels into one file so the patient sees one
+  whole body. Skin, connective tissue and most nerves were removed; the nervous system keeps
+  the brain and spinal cord.
 - Simplified every heavy mesh with meshoptimizer and dropped the tiny parts that no one can
   point at on a phone screen.
 - Colours are per-system materials, not per-vertex colours (smaller file, sharper look).

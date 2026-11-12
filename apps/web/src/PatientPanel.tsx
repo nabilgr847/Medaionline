@@ -7,7 +7,7 @@ import { PatientCombined, SendReports } from "./v38";
 import { printRx } from "./print";
 import { useTabHistory } from "./tabHistory";
 import { AnatomyCard } from "./anatomy";
-import { BodyMapCard } from "./body3d";
+import { BodyMapCard, PainSiteField } from "./body3d";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPicker, DirectMessages } from "./extras";
 
@@ -40,14 +40,15 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
   const [list, setList] = useState<any[]>([]); const [doctors, setDoctors] = useState<any[]>([]); const [specialties, setSpecialties] = useState<string[]>([]);
   const [slot, setSlot] = useState(""); const [problem, setProblem] = useState(""); const [doctorId, setDoctorId] = useState(""); const [type, setType] = useState("online"); const [openChat, setOpenChat] = useState(""); const [openCall, setOpenCall] = useState("");
   const [pastDiseases, setPastDiseases] = useState(""); const [pastInfo, setPastInfo] = useState("");
+  const [painSite, setPainSite] = useState<{ name: string; partId: number; system: string; severity: number } | null>(null);
   async function load() { try { const d = await api("/appointments"); setList(d.appointments || []); } catch (e: any) { setMessage(e.message); } }
   useEffect(() => { const f = () => { const d = (window as any).__medaiOpen; if (!d) return; if (d.kind === "call") { setOpenCall(d.appointmentId); setOpenChat(""); } else { setOpenChat(d.appointmentId); } load(); (window as any).__medaiOpen = null; }; f(); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   useEffect(() => { load(); api("/doctors").then((d) => { setDoctors(d.doctors || []); setSpecialties(d.specialties || []); }).catch(() => {}); }, []);
   async function book(e: any) {
     e.preventDefault();
     try {
-      await api("/appointments", { method: "POST", body: json({ problem, consultationType: type, pastDiseases, pastInfo, ...(doctorId ? { doctorId } : {}), ...(doctorId && slot ? { preferredAt: slot } : {}) }) });
-      setProblem(""); setDoctorId(""); setSlot(""); setPastDiseases(""); setPastInfo("");
+      await api("/appointments", { method: "POST", body: json({ problem, consultationType: type, pastDiseases, pastInfo, ...(painSite ? { painSite } : {}), ...(doctorId ? { doctorId } : {}), ...(doctorId && slot ? { preferredAt: slot } : {}) }) });
+      setProblem(""); setDoctorId(""); setSlot(""); setPastDiseases(""); setPastInfo(""); setPainSite(null);
       setMessage("Appointment request submitted. A doctor will accept it and confirm a time."); load();
     } catch (x: any) { setMessage(x.message); }
   }
@@ -56,6 +57,10 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
   return <div className="grid">
     <article><h3>Request an appointment</h3><form onSubmit={book}>
       <textarea placeholder="Describe the reason for your appointment" value={problem} onChange={(e) => setProblem(e.target.value)} required minLength={5} />
+      <details className="painsite-wrap">
+        <summary>📍 Mark the exact spot of pain on the 3D body (optional)</summary>
+        <PainSiteField value={painSite} onChange={setPainSite} />
+      </details>
       <label>Past diseases / chronic conditions (optional)<textarea placeholder="e.g. diabetes, hypertension, asthma…" value={pastDiseases} onChange={(e) => setPastDiseases(e.target.value)} maxLength={2000} rows={2} /></label>
       <label>Other past medical information (optional)<textarea placeholder="Previous surgeries, hospital stays, allergies detail, family history…" value={pastInfo} onChange={(e) => setPastInfo(e.target.value)} maxLength={4000} rows={2} /></label>
       <label>Choose a doctor (optional) — search or filter by specialty</label>
@@ -69,6 +74,7 @@ function Appointments({ api, token, user, setMessage }: { api: Api; token: strin
       {list.map((a) => <div className="item" key={a._id}>
         <b>{label(a.status)}</b>{a.scheduledAt && <> · {fmtDate(a.scheduledAt)}</>}
         <p>{a.problem}</p>
+        {a.painSite?.name && <p className="muted">📍 Pain marked at <b>{a.painSite.name}</b>{a.painSite.severity ? ` · ${a.painSite.severity}/10` : ""}</p>}
         {a.preferredAt && a.status === "requested" && <p className="muted">🕒 You asked for: {fmtDate(a.preferredAt)}</p>}
         {a.proposal?.status === "pending" && <div className="notice">🔁 The doctor suggests <b>{fmtDate(a.proposal.at)}</b>{a.proposal.note ? " — " + a.proposal.note : ""}<div className="row"><button className="primary" onClick={() => respond(a._id, true)}>✅ Accept this time</button><button className="danger" onClick={() => respond(a._id, false)}>✖ Decline</button></div></div>}
         {a.proposal?.status === "declined" && a.status === "requested" && <p className="muted">You declined the last suggested time. The doctor can suggest another.</p>}
