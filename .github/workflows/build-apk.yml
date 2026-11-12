@@ -68,13 +68,40 @@ jobs:
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          # Release build, signed with the key committed in apps/mobile/medai-release.jks.
+          # A release APK installs and updates cleanly on every phone; debug builds signed
+          # with a machine-local key are what produced "app not installed / package invalid".
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Verify the APK is properly signed
+        run: |
+          APK=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          test -f "$APK" || { echo "::error::release APK was not produced"; exit 1; }
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "--- signature ---"
+          "$BT/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
+          echo "--- package info ---"
+          "$BT/aapt2" dump badging "$APK" | grep -E "^(package|sdkVersion|targetSdkVersion|application-label)" | tee /tmp/badging.txt
+          "$BT/apksigner" verify "$APK" >/dev/null || { echo "::error::APK is not correctly signed"; exit 1; }
+          code=$(grep -o "versionCode='[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
+          {
+            echo ""
+            echo "## Install help"
+            echo ""
+            echo "- APK: release build, ${{ github.run_number }}"
+            echo "- versionCode: ${code:-unknown}"
+            echo "- Signed by: $(grep -m1 'Signer #1 certificate DN' /tmp/certs.txt | cut -d: -f2- | xargs || echo 'MedAI')"
+            echo "- If Android says \"app not installed\" or \"package appears invalid\", an older"
+            echo "  MedAI build signed with a different key is still installed."
+            echo "  Uninstall MedAI Hospital first (it is only the previous APK), then install this file."
+            echo "- The APK needs Android 6.0 or newer."
+          } >> apps/mobile/RELEASE_NOTES_ANDROID.md
 
       - name: Publish APK as a release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk MedAI-Hospital.apk
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk MedAI-Hospital.apk
           gh release delete apk-latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
           gh release create apk-latest MedAI-Hospital.apk --repo "${{ github.repository }}" \
             --title "MedAI Hospital Android APK" \

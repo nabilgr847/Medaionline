@@ -56,6 +56,10 @@ g = gradle.read_text()
 run = int(os.environ.get("GITHUB_RUN_NUMBER", "1"))
 g = re.sub(r"versionCode\s+\d+", f"versionCode {300000 + run}", g, count=1)
 g = re.sub(r'versionName\s+"[^"]*"', f'versionName "3.8.{run}"', g, count=1)
+keystore = mobile / "medai-release.jks"
+if not keystore.exists():
+    raise SystemExit(f"Signing key missing: {keystore}. The APK would be signed with a random debug key "
+                     "and could never update an existing install.")
 signing = (
     "    signingConfigs {\n        medai {\n"
     '            storeFile file("../../medai-release.jks")\n'
@@ -64,7 +68,12 @@ signing = (
 )
 if "signingConfigs.medai" not in g:
     g = g.replace("android {\n", "android {\n" + signing, 1)
-    g = g.replace("buildTypes {\n", "buildTypes {\n        debug {\n            signingConfig signingConfigs.medai\n        }\n", 1)
+# Both build types use the fixed key: a debug build and a release build of the same version
+# are interchangeable on the device, so an update never fails with "app not installed".
+g = g.replace("buildTypes {\n", "buildTypes {\n        debug {\n            signingConfig signingConfigs.medai\n        }\n", 1)
+if "release {" in g and "signingConfig signingConfigs.medai" not in g.split("release {", 1)[1].split("}", 1)[0]:
+    head, tail = g.split("release {", 1)
+    g = head + "release {\n            signingConfig signingConfigs.medai" + tail
 gradle.write_text(g)
 print(f"Signing key fixed; versionCode {300000 + run}.")
 
