@@ -211,10 +211,20 @@ img.banner{
 .roundbtn.end{ background:var(--danger); }
 .roundbtn.endsm{ background:var(--danger); }
 
+/* Secondary call controls (flip, share, noise, help, record, fit, fullscreen, minimize).
+   They used to sit at the same bottom offset as .callbar (mic / chat / end), so on a phone the
+   two rows were drawn on top of each other. They now live as a scrollable strip under the
+   status line, and the primary bar keeps the bottom. */
 .callbar2{
-  position:absolute; left:0; right:0; bottom:calc(env(safe-area-inset-bottom,0px) + 16px);
-  display:flex; align-items:center; justify-content:center; gap:14px; z-index:4;
+  position:absolute; left:0; right:0; z-index:5;
+  top:calc(env(safe-area-inset-top,0px) + 54px);
+  display:flex; align-items:center; justify-content:flex-end; gap:8px;
+  padding:0 12px; overflow-x:auto; overflow-y:hidden;
+  scrollbar-width:none; -webkit-overflow-scrolling:touch;
 }
+.callbar2::-webkit-scrollbar{ display:none; }
+.callbar2 .roundbtn{ flex:0 0 auto; }
+.callbar2 .roundbtn.sm{ width:40px; height:40px; min-width:40px; min-height:40px; font-size:.9rem; }
 .pipbar{
   display:flex; align-items:center; gap:10px; padding:8px 10px 8px 14px;
   background:#0f172a; color:#e2e8f0; border-radius:var(--radius-pill);
@@ -258,8 +268,9 @@ img.banner{
 
 @media(max-width:900px){
   .callstage{ border-radius:0; min-height:100dvh; }
-  .call-local{ width:88px; right:10px; bottom:100px; }
-  .callbar2{ gap:10px; }
+  .call-local{ width:88px; right:10px; bottom:104px; }
+  .call-remote small{ bottom:104px; }
+  .callbar2{ gap:6px; padding:0 10px; justify-content:flex-start; }
   .roundbtn{ width:48px; height:48px; min-height:48px; }
   .roundbtn.big{ width:60px; height:60px; }
   .chatmain{ height:calc(100dvh - 200px); min-height:360px; }
@@ -926,4 +937,22 @@ button.linkish{ background:none; border:0; padding:0 4px; min-height:auto; color
   .posters{ margin-top:20px; }
   .poster{ flex:0 0 78vw; }
   .poster-body h3{ font-size:16px; }
+}
+
+/* ---------- "Use fingerprint / face next time?" — asked once after the account opens ---------- */
+.passkey-nudge{
+  max-width:1180px; margin:14px auto 0; padding:14px 16px;
+  display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px;
+  border:1px solid #bfdbfe; border-radius:16px;
+  background:linear-gradient(120deg,#eff6ff 0%,#f8fbff 60%,#ffffff 100%);
+  box-shadow:0 6px 18px rgba(37,99,235,.08);
+}
+.passkey-nudge b{ display:block; font-size:14.5px; color:var(--ink); }
+.passkey-nudge p{ margin:4px 0 0; max-width:60ch; }
+.passkey-nudge .row{ display:flex; gap:8px; flex:0 0 auto; }
+.passkey-nudge .row button{ min-height:44px; }
+@media (max-width:767px){
+  .passkey-nudge{ margin:12px 12px 0; flex-direction:column; align-items:stretch; }
+  .passkey-nudge .row{ width:100%; }
+  .passkey-nudge .row button{ flex:1 1 0; }
 }

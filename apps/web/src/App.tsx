@@ -18,7 +18,7 @@ import GuestConsultRoom from "./GuestConsultRoom";
 import TeleVisitCall from "./TeleVisitCall";
 import CommercialPanel from "./CommercialPanel";
 import { biometricLockEnabled, setBiometricLockEnabled, isNativeApp, unlockWithBiometric, checkBiometrics, biometricLabel, biometricToken, saveBiometricToken, forgetBiometricToken } from "./biometric";
-import { passkeysSupported, signInWithPasskey, passkeyEmail, rememberPasskeyEmail } from "./webauthn";
+import { passkeysSupported, signInWithPasskey, passkeyEmail, rememberPasskeyEmail, addPasskey, listPasskeys } from "./webauthn";
 
 type User = { id: string; name: string; email: string; role: "patient" | "doctor" | "admin" };
 
@@ -84,6 +84,56 @@ function BiometricLock({ userName, onUnlock, onSignOut }: { userName?: string; o
       {note && <p className="warn" role="alert">{note}</p>}
       <button className="primary" onClick={attempt} disabled={busy}>{busy ? "Waiting for fingerprint..." : "Unlock with fingerprint"}</button>
       <button className="link" onClick={onSignOut}>Sign out and use password</button>
+    </div>
+  </div>;
+}
+
+/**
+ * "Do you want fingerprint / face unlock?" — asked once, right after the account opens (any
+ * role: patient, doctor, admin), and only when the browser can actually do it. The answer is
+ * saved on the device: "Not now" snoozes for 14 days instead of nagging on every sign-in, and
+ * the Security panel always allows adding it by hand later.
+ */
+const PASSKEY_SNOOZE_KEY = "medai_passkey_snooze";
+
+function PasskeyNudge({ api, email, onDone }: { api: any; email: string; onDone: (s: string) => void }) {
+  const [state, setState] = useState<"check" | "ask" | "busy" | "off">("check");
+  useEffect(() => {
+    let alive = true;
+    const snoozed = Number(localStorage.getItem(PASSKEY_SNOOZE_KEY) || 0);
+    if (snoozed && snoozed > Date.now()) { setState("off"); return; }
+    listPasskeys(api)
+      .then((rows) => { if (alive) setState(rows.length ? "off" : "ask"); })
+      .catch(() => { if (alive) setState("off"); });   // older API without passkey routes
+    return () => { alive = false; };
+  }, [email]);
+
+  if (state === "check" || state === "off") return null;
+  return <div className="passkey-nudge">
+    <div>
+      <b>🔒 Open MedAI with your fingerprint or face?</b>
+      <p className="muted small">Next time you can sign in without typing the password — on this device only. Your fingerprint never leaves it, and you can remove it any time in Settings → Security.</p>
+    </div>
+    <div className="row">
+      <button className="primary" disabled={state === "busy"} onClick={async () => {
+        setState("busy");
+        try {
+          const label = navigator.userAgent.includes("Windows") ? "Windows Hello"
+            : /iPhone|iPad/.test(navigator.userAgent) ? "This iPhone / iPad"
+            : navigator.userAgent.includes("Android") ? "This Android phone" : "This browser";
+          const rows = await addPasskey(api, label);
+          rememberPasskeyEmail(email);
+          setState("off");
+          onDone(rows.length ? "Saved. This device can now open MedAI with your fingerprint or face." : "Saved.");
+        } catch (e: any) {
+          setState("ask");
+          onDone(e.message || "Could not add this device.");
+        }
+      }}>{state === "busy" ? "Waiting for the device…" : "Add this device"}</button>
+      <button className="outline" onClick={() => {
+        localStorage.setItem(PASSKEY_SNOOZE_KEY, String(Date.now() + 14 * 24 * 3600 * 1000));
+        setState("off");
+      }}>Not now</button>
     </div>
   </div>;
 }
@@ -186,6 +236,7 @@ function MainApp() {
   function turnOnBiometric() {
     saveBiometricToken(localStorage.getItem("medai_token") || "");
     setBiometricLockEnabled(true);
+    localStorage.removeItem("medai_bio_ask_snooze");
     setAskBio(false);
   }
 
@@ -241,7 +292,11 @@ function MainApp() {
       rememberPasskeyEmail(email);
       if (isNativeApp()) {
         if (biometricLockEnabled()) saveBiometricToken(d.token);
-        else if (bio.available) setAskBio(true);
+        else if (bio.available) {
+          // Do not ask on every single sign-in: "Not now" is remembered for two weeks.
+          const snoozed = Number(localStorage.getItem("medai_bio_ask_snooze") || 0);
+          if (!snoozed || snoozed < Date.now()) setAskBio(true);
+        }
       }
     } catch (x: any) {
       setMessage(x.message);
@@ -366,7 +421,7 @@ function MainApp() {
             <div className="bioask">
               <b>Use {biometricLabel(bio.type)} next time?</b>
               <p className="muted small">Unlock MedAI with {biometricLabel(bio.type)} instead of typing your password. You can switch this off any time in Settings, Security.</p>
-              <div className="row"><button type="button" className="primary" onClick={turnOnBiometric}>Turn on</button><button type="button" className="outline" onClick={() => setAskBio(false)}>Not now</button></div>
+              <div className="row"><button type="button" className="primary" onClick={turnOnBiometric}>Turn on</button><button type="button" className="outline" onClick={() => { localStorage.setItem("medai_bio_ask_snooze", String(Date.now() + 14 * 24 * 3600 * 1000)); setAskBio(false); }}>Not now</button></div>
             </div>
           )}
           <button className="link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setMessage(""); }}>{mode === "login" ? "Create a patient account" : "Back to sign in"}</button>
@@ -412,6 +467,7 @@ function MainApp() {
         {pendingNote && <p className="warn">{pendingNote.note ? "Message from the admin team: " + pendingNote.note : "Your documents are being reviewed."} If more documents were requested, use “Send requested documents”.</p>}
       </div></section></>}
 
+    {user && !nativeApp && passkeyOk && <PasskeyNudge api={api} email={user.email} onDone={setMessage} />}
     {user && user.role !== "admin" && <AlertCenter api={api} />}
     {user && user.role !== "admin" && <IncomingCallBanner api={api} />}
     {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1></div><span className="role">{user.role}</span></div>
