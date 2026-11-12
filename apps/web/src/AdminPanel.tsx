@@ -12,7 +12,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
   const [tab, setTab] = useTabHistory("doctors", "adminTab");
   const badges = useBadges(api, "admin");
   return <div>
-    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["scan", "📷 Scan QR"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["diseases", "Diseases"], ["specialties", "Specialties"], ["banner", "Banner"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
+    <Tabs badges={badges} tab={tab} setTab={setTab} tabs={[["doctors", "Doctor verification"], ["schedule", "Doctor schedules"], ["convos", "Messages & calls"], ["direct", "Direct messages"], ["temporary", "Temporary links"], ["reports", "Reports"], ["scan", "📷 Scan QR"], ["resets", "Requests"], ["users", "Users"], ["monitor", "Live monitoring"], ["medicines", "Medicine review"], ["import", "Import medicines"], ["diseases", "Diseases"], ["specialties", "Specialties"], ["banner", "Banner"], ["ads", "Sponsored"], ["system", "System & recovery"], ["security", "Password & audit"]]} />
     {tab === "doctors" && <><Overview api={api} setMessage={setMessage} /><DoctorQueue api={api} token={token} setMessage={setMessage} /></>}
     {tab === "schedule" && <AdminSchedules api={api} setMessage={setMessage} />}
     {tab === "convos" && <AdminConversations api={api} user={user} setMessage={setMessage} />}
@@ -28,6 +28,7 @@ export default function AdminPanel({ api, user, token, onToken, setMessage }: { 
     {tab === "diseases" && <DiseaseManager api={api} setMessage={setMessage} />}
     {tab === "specialties" && <SpecialtiesEditor api={api} setMessage={setMessage} />}
     {tab === "banner" && <BannerEditor api={api} setMessage={setMessage} />}
+    {tab === "ads" && <AdsManager api={api} setMessage={setMessage} />}
     {tab === "system" && <AdminSystem api={api} setMessage={setMessage} />}
     {tab === "security" && <Security api={api} onToken={onToken} setMessage={setMessage} />}
   </div>;
@@ -392,6 +393,68 @@ function BannerEditor({ api, setMessage }: { api: Api; setMessage: (s: string) =
       <label>Slide image (PNG, JPG or WEBP; auto-resized)<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pick(e.target.files?.[0])} /></label>
       {s.image && <div className="row"><img src={s.image} alt="" style={{ maxWidth: 260, borderRadius: 12 }} /><button type="button" className="outline" onClick={() => setS("image", "")}>Use default image</button></div>}
       <div className="row"><button className="primary" disabled={busy}>💾 Save banner</button><button type="button" className="danger" onClick={remove}>🗑️ Delete this slide</button><button type="button" className="outline" onClick={reset}>Reset to default</button></div>
+    </form></article></div>;
+}
+
+/**
+ * Sponsored cards. Deliberately plain: a medical app must not look like an ad network.
+ * The admin can switch the whole feature off, and every card is labelled "Ad" in the app.
+ */
+function AdsManager({ api, setMessage }: { api: Api; setMessage: (s: string) => void }) {
+  const [data, setData] = useState<any>(null); const [n, setN] = useState(0); const [busy, setBusy] = useState(false);
+  useEffect(() => { api("/admin/ads").then((d) => setData(d.ads)).catch((e) => setMessage(e.message)); }, []);
+  if (!data) return <p className="muted">Loading sponsored cards…</p>;
+  const items: any[] = data.items || [];
+  const current = items[Math.min(n, items.length - 1)];
+  const setItem = (k: string, v: any) => setData({ ...data, items: items.map((x, i) => (i === n ? { ...x, [k]: v } : x)) });
+  async function save(e: any) {
+    e.preventDefault(); setBusy(true);
+    try { const d = await api("/admin/ads", { method: "PUT", body: json({ enabled: data.enabled, note: data.note, items }) }); setData(d.ads); setMessage(d.message); }
+    catch (x: any) { setMessage(x.message); }
+    setBusy(false);
+  }
+  async function reset() {
+    if (!confirm("Remove every sponsored card?")) return;
+    try { const d = await api("/admin/ads", { method: "DELETE" }); setData(d.ads); setN(0); setMessage(d.message); } catch (x: any) { setMessage(x.message); }
+  }
+  function add() {
+    if (items.length >= 20) return setMessage("Maximum 20 cards.");
+    setData({ ...data, items: [...items, { title: "", body: "", sponsor: "", ctaText: "", ctaUrl: "", placement: "home", active: true, priority: 0 }] });
+    setN(items.length);
+  }
+  function remove() { if (!items.length) return; setData({ ...data, items: items.filter((_, i) => i !== n) }); setN(0); }
+  const clicks = data.clicks || {};
+  return <div className="grid"><article className="full"><h3>Sponsored cards (optional)</h3>
+    <p className="muted">One quiet card per screen, always labelled <b>Ad</b>. Visitors can hide it with one tap, and it is never placed inside a report, prescription or AI answer. Keep medical claims out of ads — no cures, no guarantees.</p>
+    <form onSubmit={save}>
+      <label className="check"><input type="checkbox" checked={data.enabled !== false} onChange={(e) => setData({ ...data, enabled: e.target.checked })} /> Show sponsored cards</label>
+      <label>Small note under every card (optional)<input value={data.note || ""} maxLength={200} onChange={(e) => setData({ ...data, note: e.target.value })} placeholder="Sponsored content is not medical advice" /></label>
+      <div className="tabs">{items.map((it: any, i: number) => <button type="button" key={i} className={i === n ? "active" : ""} onClick={() => setN(i)}>{it.title || "Card " + (i + 1)}</button>)}
+        <button type="button" className="outline" onClick={add}>➕ Add card</button></div>
+      {current ? <>
+        <label>Title<input value={current.title || ""} maxLength={90} required onChange={(e) => setItem("title", e.target.value)} /></label>
+        <label>Text (optional)<textarea value={current.body || ""} maxLength={220} onChange={(e) => setItem("body", e.target.value)} /></label>
+        <div className="cols">
+          <label>Sponsor name<input value={current.sponsor || ""} maxLength={60} onChange={(e) => setItem("sponsor", e.target.value)} /></label>
+          <label>Where<select value={current.placement || "home"} onChange={(e) => setItem("placement", e.target.value)}>
+            <option value="home">Home page</option><option value="dashboard">Dashboards</option><option value="chat">AI chat</option><option value="all">Everywhere</option>
+          </select></label>
+        </div>
+        <div className="cols">
+          <label>Button text<input value={current.ctaText || ""} maxLength={30} onChange={(e) => setItem("ctaText", e.target.value)} /></label>
+          <label>Button link (https://…)<input value={current.ctaUrl || ""} maxLength={300} onChange={(e) => setItem("ctaUrl", e.target.value)} /></label>
+        </div>
+        <div className="cols">
+          <label>Priority (higher shows first)<input type="number" min={0} max={99} value={current.priority || 0} onChange={(e) => setItem("priority", Math.max(0, Math.min(99, Number(e.target.value) || 0)))} /></label>
+          <label className="check"><input type="checkbox" checked={current.active !== false} onChange={(e) => setItem("active", e.target.checked)} /> Active</label>
+        </div>
+        <p className="muted">Clicks recorded: <b>{clicks[current.id || current.title] || 0}</b> (aggregate only — no user is identified)</p>
+      </> : <p className="muted">No sponsored cards yet. Add one, or leave the feature off.</p>}
+      <div className="row">
+        <button className="primary" disabled={busy}>{busy ? "Saving…" : "💾 Save sponsored cards"}</button>
+        {current && <button type="button" className="danger" onClick={remove}>🗑️ Delete this card</button>}
+        <button type="button" className="outline" onClick={reset}>Remove all</button>
+      </div>
     </form></article></div>;
 }
 

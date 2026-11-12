@@ -551,3 +551,146 @@ img.banner{
 .bioask .small{ margin:4px 0 10px; }
 .bioask .row{ display:flex; gap:8px; }
 .bioask .row button{ flex:1 1 0; min-height:40px; }
+
+/* ==========================================================================
+   Home hero — two separate designs (phone vs desktop)
+   ========================================================================== */
+
+/* ---- phone: picture first, text on the picture ---- */
+.hero2.mobile{ padding:10px 12px 4px; }
+.hero2-card{
+  position:relative; overflow:hidden; border-radius:22px;
+  box-shadow:0 16px 34px rgba(15,23,42,.18); background:#0b1b2b;
+  min-height:min(72vw,360px); display:flex; align-items:flex-end;
+}
+.hero2-bg{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.hero2-scrim{
+  position:absolute; inset:0;
+  background:linear-gradient(180deg,rgba(9,27,43,.05) 22%,rgba(9,27,43,.72) 68%,rgba(9,27,43,.92) 100%);
+}
+.hero2-copy{ position:relative; z-index:1; padding:16px 16px 18px; width:100%; }
+.hero2-eyebrow{
+  display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:.12em;
+  color:#dbeafe; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.22);
+  padding:4px 9px; border-radius:var(--radius-pill); margin-bottom:8px;
+}
+.hero2.mobile h1{
+  font-family:var(--font-display); font-size:1.42rem; line-height:1.2; font-weight:800;
+  color:#fff; margin:0 0 6px; -webkit-text-fill-color:#fff; background:none; letter-spacing:-.02em;
+}
+.hero2.mobile p{ color:#e2e8f0; font-size:.9rem; line-height:1.5; margin:0 0 12px; max-width:34ch; }
+.hero2-cta{
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  min-height:48px; padding:0 20px; border:0; border-radius:14px;
+  background:#fff; color:#0b5ed6; font-weight:800; font-size:.95rem;
+  box-shadow:0 10px 22px rgba(2,6,23,.28); width:100%;
+}
+.hero2-cta:active{ transform:translateY(1px); }
+.hero2-dots{ display:flex; align-items:center; gap:6px; position:absolute; top:14px; right:14px; z-index:2; }
+.hero2-dots button{
+  width:7px; height:7px; min-height:7px; padding:0; border:0; border-radius:50%;
+  background:rgba(255,255,255,.55);
+}
+.hero2-dots button.on{ width:20px; border-radius:var(--radius-pill); background:#fff; }
+.hero2-link{
+  display:block; text-align:center; font-size:12.5px; font-weight:700;
+  color:var(--brand); padding:8px 0 2px;
+}
+
+/* ---- desktop: message left, artwork card right ---- */
+.hero2.desktop{
+  display:grid; grid-template-columns:1.02fr .98fr; gap:40px; align-items:center;
+  max-width:1180px; margin:0 auto; padding:56px 32px 44px;
+}
+.hero2.desktop h1{
+  font-family:var(--font-display); font-size:clamp(2.1rem,3.3vw,3.1rem); line-height:1.06;
+  font-weight:800; letter-spacing:-.035em; margin:14px 0 16px; max-width:15ch;
+  background:linear-gradient(120deg,#0f172a 25%,var(--brand) 92%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.hero2.desktop p{ color:var(--muted); font-size:1.02rem; line-height:1.7; max-width:46ch; margin:0 0 18px; }
+.hero2.desktop .hero2-eyebrow{
+  color:var(--brand); background:var(--brand-soft); border-color:#cfe0fb; margin-bottom:0;
+}
+.hero2-pills{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:22px; }
+.hero2-pills span{
+  font-size:12px; font-weight:600; color:#334155; background:#fff;
+  border:1px solid var(--line); border-radius:var(--radius-pill); padding:6px 12px;
+}
+.hero2-actions{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.hero2.desktop .hero2-cta{
+  width:auto; background:linear-gradient(135deg,var(--brand),#0a4fc2); color:#fff;
+  padding:0 24px; border-radius:14px; box-shadow:0 14px 30px rgba(11,94,214,.28);
+}
+.hero2-ghost{
+  font-size:.92rem; font-weight:700; color:var(--brand); text-decoration:none;
+  border-bottom:2px solid transparent; padding:6px 2px;
+}
+.hero2-ghost:hover{ border-color:var(--brand); }
+.hero2.desktop .hero2-dots{ position:static; margin-top:22px; }
+.hero2.desktop .hero2-dots button{ background:#cbd5e1; }
+.hero2.desktop .hero2-dots button.on{ background:var(--brand); }
+
+.hero2-art{ position:relative; }
+.hero2-img{
+  display:block; width:100%; aspect-ratio:4 / 3; object-fit:cover;
+  border-radius:26px; border:1px solid var(--line);
+  box-shadow:0 30px 60px rgba(15,23,42,.20);
+}
+.hero2-badge{
+  position:absolute; left:-16px; bottom:26px; display:flex; flex-direction:column; gap:2px;
+  background:rgba(255,255,255,.96); border:1px solid var(--line); border-radius:14px;
+  padding:10px 14px; box-shadow:var(--shadow); backdrop-filter:blur(6px);
+}
+.hero2-badge b{ font-size:12.5px; color:var(--ink); }
+.hero2-badge span{ font-size:11px; color:var(--muted); }
+.hero2-badge.low{ left:auto; right:-14px; bottom:auto; top:26px; }
+
+/* ---- tablet ---- */
+@media (min-width:768px) and (max-width:1099px){
+  .hero2.desktop{ grid-template-columns:1fr; gap:24px; padding:34px 22px 26px; }
+  .hero2.desktop h1{ font-size:clamp(1.9rem,4.4vw,2.5rem); max-width:20ch; }
+  .hero2-badge{ left:12px; bottom:12px; }
+  .hero2-badge.low{ left:auto; right:12px; top:12px; }
+}
+
+/* ==========================================================================
+   Sponsored cards
+   ========================================================================== */
+.home-ad{ max-width:1180px; margin:0 auto; padding:0 24px 10px; }
+@media (max-width:767px){ .home-ad{ padding:0 12px 6px; } }
+
+.adcard{
+  border:1px dashed #cbd5e1; border-radius:16px; background:#fff;
+  padding:14px 16px; box-shadow:var(--shadow-sm); position:relative;
+}
+.adcard.rail{ max-width:420px; }
+.adcard.wide{ width:100%; }
+.adhead{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.adtag{
+  font-size:9.5px; font-weight:800; letter-spacing:.14em; text-transform:uppercase;
+  color:#64748b; background:#f1f5f9; border:1px solid var(--line);
+  border-radius:6px; padding:2px 6px;
+}
+.adsponsor{ font-size:11.5px; font-weight:600; color:var(--muted); }
+.adimg{ display:block; width:100%; max-height:150px; object-fit:cover; border-radius:10px; margin-bottom:10px; }
+.adtitle{ display:block; font-size:14.5px; color:var(--ink); line-height:1.35; }
+.adbody{ font-size:12.5px; color:var(--muted); line-height:1.6; margin:5px 0 10px; }
+.adfoot{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.adcta{
+  font-size:12.5px; font-weight:800; color:#fff; background:var(--brand);
+  padding:8px 14px; border-radius:10px; text-decoration:none; min-height:36px;
+  display:inline-flex; align-items:center;
+}
+.adcta:hover{ background:var(--brand-hover); }
+.adhide{
+  background:none; border:0; box-shadow:none; padding:6px 2px;
+  font-size:11px; color:#94a3b8; text-decoration:underline; min-height:32px;
+}
+.adhide:hover{ color:var(--muted); }
+.adnote{ font-size:10.5px; color:#94a3b8; margin:8px 0 0; }
+
+/* desktop reduces motion; the phone keeps the swipeable card */
+@media (prefers-reduced-motion:reduce){
+  .hero2 .slidefade{ animation:none; }
+}
