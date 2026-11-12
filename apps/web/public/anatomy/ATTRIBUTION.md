@@ -1,6 +1,7 @@
 # 3D anatomy model — attribution
 
-The model in this folder (`body.glb`) is derived from **BodyParts3D 4.0**:
+The models in this folder (`body.glb`, `muscles.glb`, `vessels.glb`) are derived from
+**BodyParts3D 4.0**:
 
 > BodyParts3D, © The Database Center for Life Science, licensed under
 > [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
@@ -12,11 +13,15 @@ The model in this folder (`body.glb`) is derived from **BodyParts3D 4.0**:
   concepts*, <https://doi.org/10.1093/nar/gkn613>
 
 ## Changes made for MedAI Hospital
-- Kept the skeleton and the organs a patient can point at; removed muscles, blood vessels,
-  the body surface and most nerves (they made the download too large for a phone).
-- Simplified heavy meshes with meshoptimizer.
-- Packed everything into one glTF binary with vertex colours and a per-vertex part id, and
-  added `body.parts.json` which maps a picked triangle back to an anatomical name.
+- Split the body into three layers: bones + organs (always), muscles and blood vessels
+  (optional, downloaded only when the patient switches them on). Skin, connective tissue
+  and most nerves were removed; the nervous system keeps the brain and spinal cord.
+- Simplified every heavy mesh with meshoptimizer and dropped the tiny parts that no one can
+  point at on a phone screen.
+- Colours are per-system materials, not per-vertex colours (smaller file, sharper look).
+- Packed each layer into one glTF binary with uint16 indices and a per-vertex part id;
+  `body.parts.json` maps a picked vertex back to an anatomical name.
+- Normals are not stored in the file (about 1 MB) and are computed on the device once.
 
 CC BY 4.0 requires attribution, not permission: MedAI keeps this notice in the app
-(*3D anatomy → About this model*) and ships this file with the model.
+(*3D body → "Where this body model comes from"*) and ships this file with the models.

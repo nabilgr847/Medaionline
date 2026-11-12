@@ -8,6 +8,7 @@
 //
 // Rules baked into this screen:
 //   * nothing is downloaded until the patient opens the map (three.js + a 4 MB model);
+//   * muscles and blood vessels are separate ~1 MB files, fetched only when switched on;
 //   * a metered connection asks first (same preference as the 3D anatomy tab);
 //   * this is a way to reach a doctor, not a diagnosis — the copy says so plainly;
 //   * emergencies never wait for a doctor reply: call 999.
@@ -19,7 +20,14 @@ import { wifiOnly, setWifiOnly, looksMetered, webglAvailable } from "./anatomy";
 const MODEL_URL = "anatomy/body.glb";
 const PARTS_URL = "anatomy/body.parts.json";
 
-type BodyPart = { id: number; name: string; system: string };
+/** Optional overlay layers: real BodyParts3D data, downloaded on demand. */
+const EXTRA_LAYERS = [
+  { id: "muscles", file: "anatomy/muscles.glb", label: "Muscles", size: "1.2 MB", opacity: 0.34 },
+  { id: "vessels", file: "anatomy/vessels.glb", label: "Blood vessels", size: "0.9 MB", opacity: 1 },
+] as const;
+type ExtraLayer = "muscles" | "vessels";
+
+type BodyPart = { id: number; name: string; system: string; layer?: string };
 type Layers = Record<string, boolean>;
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -54,6 +62,9 @@ type Handles = {
   nudge: (direction: number) => void;
   zoomBy: (factor: number) => void;
   applyLayers: (layers: Layers) => void;
+  /** Downloads and attaches an optional layer. Returns how many new meshes were added. */
+  loadLayer: (layer: ExtraLayer) => Promise<number>;
+  setExtraVisible: (layer: ExtraLayer, visible: boolean) => void;
 };
 
 /** Builds the three.js scene. Three.js is imported here so it stays out of the main bundle. */
@@ -112,21 +123,44 @@ async function buildBody(
   });
 
   const pickables: any[] = [];
-  gltf.scene.traverse((node: any) => {
-    if (!node.isMesh) return;
-    // The file carries no normals (they cost ~1 MB); smooth them once on the device.
+  const attach = (node: any, layer: string) => {
+    // The files carry no normals (they cost ~1 MB); smooth them once on the device.
     if (!node.geometry.attributes.normal) node.geometry.computeVertexNormals();
     node.userData.system = node.name.replace(/-\d+$/, "");
+    node.userData.layer = layer;
     node.frustumCulled = true;
     const material = Array.isArray(node.material) ? node.material[0] : node.material;
     if (material) {
-      material.roughness = node.userData.system === "skeletal" ? 0.95 : 0.55;
+      material.roughness = node.userData.system === "skeletal" ? 0.95 : 0.6;
       material.metalness = 0;
       material.side = THREE.DoubleSide;
+      if (layer === "muscles") {
+        // See-through so the bones and organs stay visible inside the body.
+        material.transparent = true;
+        material.opacity = EXTRA_LAYERS.find((entry) => entry.id === "muscles")!.opacity;
+        material.depthWrite = false;
+      }
     }
     pickables.push(node);
     group.add(node);
-  });
+  };
+  gltf.scene.traverse((node: any) => { if (node.isMesh) attach(node, "body"); });
+
+  const loadedExtras = new Set<ExtraLayer>();
+  const extraVisiblity: Record<string, boolean> = { muscles: true, vessels: true };
+  const loadLayer = async (layer: ExtraLayer) => {
+    if (loadedExtras.has(layer)) return 0;
+    const entry = EXTRA_LAYERS.find((item) => item.id === layer)!;
+    const extra: any = await new Promise((resolve, reject) => {
+      loader.load(entry.file, resolve, undefined, () => reject(new Error(`${entry.label} could not be downloaded.`)));
+    });
+    const added: any[] = [];
+    extra.scene.traverse((node: any) => { if (node.isMesh) added.push(node); });
+    for (const node of added) attach(node, layer);
+    loadedExtras.add(layer);
+    for (const node of added) node.visible = extraVisiblity[layer] !== false;
+    return added.length;
+  };
 
   // Marker for the tapped spot: small glowing dot + ring, always drawn on top.
   const marker = new THREE.Group();
@@ -268,6 +302,11 @@ async function buildBody(
         mesh.visible = visible;
       }
     },
+    loadLayer,
+    setExtraVisible: (layer: ExtraLayer, visible: boolean) => {
+      extraVisiblity[layer] = visible;
+      for (const mesh of pickables) if (mesh.userData.layer === layer) mesh.visible = visible;
+    },
     dispose: () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
@@ -310,6 +349,7 @@ export function BodyMapCard({ api, token, setMessage }: { api: Api; token: strin
   const [mine, setMine] = useState<any[]>([]);
   const [downloadAnyway, setDownloadAnyway] = useState(false);
   const [allParts, setAllParts] = useState<BodyPart[]>([]);
+  const [extras, setExtras] = useState<Record<ExtraLayer, "off" | "loading" | "on">>({ muscles: "off", vessels: "off" });
 
   useEffect(() => {
     api("/doctors").then((d) => setDoctors(d.doctors || [])).catch(() => {});
@@ -351,6 +391,32 @@ export function BodyMapCard({ api, token, setMessage }: { api: Api; token: strin
     const next = { ...layers, [system]: layers[system] === false };
     setLayers(next);
     handles.current?.applyLayers(next);
+  }
+
+  /** Optional layers are separate downloads, so switching one on may fetch ~1 MB first. */
+  async function toggleExtra(layer: ExtraLayer) {
+    const state = extras[layer];
+    if (state === "on") {
+      handles.current?.setExtraVisible(layer, false);
+      setExtras((current) => ({ ...current, [layer]: "off" }));
+      return;
+    }
+    if (state === "loading") return;
+    const entry = EXTRA_LAYERS.find((item) => item.id === layer)!;
+    if (metered && wifiOnly() && !downloadAnyway) {
+      setMessage(`${entry.label} is an extra ${entry.size} download. Turn off "ask before mobile data" in Settings to load it here.`);
+      return;
+    }
+    setExtras((current) => ({ ...current, [layer]: "loading" }));
+    try {
+      const added = await handles.current?.loadLayer(layer);
+      handles.current?.setExtraVisible(layer, true);
+      setExtras((current) => ({ ...current, [layer]: added ? "on" : "off" }));
+      if (!added) setMessage(`${entry.label} could not be added to this view.`);
+    } catch (x: any) {
+      setExtras((current) => ({ ...current, [layer]: "off" }));
+      setMessage(x?.message || `${entry.label} could not be downloaded.`);
+    }
   }
 
   async function send(e: any) {
@@ -417,6 +483,18 @@ export function BodyMapCard({ api, token, setMessage }: { api: Api; token: strin
         {systems.map((system) => <button key={system} className={"chip" + (layers[system] === false ? " off" : "")} onClick={() => toggleSystem(system)} aria-pressed={layers[system] !== false}>{SYSTEM_LABEL[system] || system}</button>)}
       </div>}
 
+      {phase === "ready" && <div className="bodymap-extras">
+        <span className="muted">Extra layers:</span>
+        {EXTRA_LAYERS.map((entry) => {
+          const state = extras[entry.id];
+          return <button key={entry.id} className={"chip" + (state === "on" ? " on" : "")} onClick={() => toggleExtra(entry.id)} aria-pressed={state === "on"}>
+            {state === "loading" ? "⏳ " : state === "on" ? "✓ " : "＋ "}{entry.label}
+            <small>{state === "on" ? " shown" : " " + entry.size}</small>
+          </button>;
+        })}
+      </div>}
+      {phase === "ready" && (extras.muscles !== "off" || extras.vessels !== "off") && <p className="bodymap-hint-inline">Muscles are see-through so the bones and organs stay visible. Tap the body again after switching layers — the nearest surface under your finger is what gets reported.</p>}
+
       <form className="bodymap-form" onSubmit={send}>
         <label>Or pick from the list (works without 3D)
           <select value={picked?.id ?? ""} onChange={(e) => {
@@ -425,13 +503,14 @@ export function BodyMapCard({ api, token, setMessage }: { api: Api; token: strin
             setPicked(found ? { id: found.id, name: found.name } : null);
           }}>
             <option value="">Choose a body part…</option>
-            {Array.from(new Set(allParts.map((p) => p.system))).map((system) => (
-              <optgroup key={system} label={SYSTEM_LABEL[system] || system}>
-                {allParts.filter((p) => p.system === system).map((p) => (
+            {Array.from(new Set(allParts.map((p) => `${p.layer || "body"}|${p.system}`))).map((key) => {
+              const [layer, system] = key.split("|");
+              return <optgroup key={key} label={layer === "body" ? (SYSTEM_LABEL[system] || system) : `${layer === "muscles" ? "Muscle" : "Vessel"} · ${system}`}>
+                {allParts.filter((p) => (p.layer || "body") === layer && p.system === system).map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
-              </optgroup>
-            ))}
+              </optgroup>;
+            })}
           </select>
         </label>
         <div className="bodymap-picked">

@@ -499,7 +499,7 @@ function Quiz({ organ }: { organ: OrganInfo }) {
   );
 }
 
-export function AnatomyCard() {
+export function AnatomyCard({ onOpenBodyMap }: { onOpenBodyMap?: () => void } = {}) {
   const [organId, setOrganId] = useState<Organ>("heart");
   const [open, setOpen] = useState(false);
   const [labels, setLabels] = useState(true);
@@ -558,6 +558,15 @@ export function AnatomyCard() {
 
   return (
     <article className="anatomy">
+      {/* The real full-body model lives on its own tab; people looked for it here first. */}
+      {onOpenBodyMap && <div className="anatomy-promo">
+        <div>
+          <b>🫀 Real full-body model — tap the spot that hurts</b>
+          <p className="muted small">A real skeleton, organs, muscles and blood vessels you can rotate and zoom. Tap your pain and send it to a doctor of your choice.</p>
+        </div>
+        <button className="primary" onClick={onOpenBodyMap}>Open the pain map →</button>
+      </div>}
+
       <div className="anatomy-head">
         <div>
           <h3>3D anatomy</h3>
