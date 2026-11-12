@@ -763,3 +763,46 @@ footer .emergency a{ color:#b91c1c; font-weight:700; text-decoration:none; }
 .emptystate span[aria-hidden]{ font-size:26px; line-height:1; }
 .emptystate b{ color:var(--ink); font-size:14px; }
 .emptystate p{ margin:0; font-size:12.5px; max-width:40ch; line-height:1.55; }
+
+/* ==========================================================================
+   3D anatomy (lazy-loaded; the fallback is a real card, not a blank box)
+   ========================================================================== */
+.anatomy{ border:1px solid var(--line); border-radius:18px; background:#fff; padding:18px; box-shadow:var(--shadow-sm); }
+.anatomy-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; }
+.anatomy-head h3{ margin:0 0 4px; font-size:1rem; color:var(--ink); }
+.anatomy-head p{ margin:0; max-width:52ch; }
+.anatomy-head .primary, .anatomy-head .outline{ min-height:44px; }
+
+.anatomy-tabs{ display:flex; gap:8px; margin:16px 0 12px; flex-wrap:wrap; }
+.anatomy-tabs button{
+  min-height:40px; padding:0 16px; border-radius:999px; border:1px solid var(--line);
+  background:#fff; color:#334155; font-size:13px; font-weight:600;
+}
+.anatomy-tabs button.active{ background:var(--brand); border-color:var(--brand); color:#fff; }
+
+.anatomy-stage{
+  position:relative; border-radius:16px; overflow:hidden;
+  background:radial-gradient(circle at 50% 35%, #eef6ff 0%, #dbeafe 45%, #cfe0fb 100%);
+  min-height:300px;
+}
+.anatomy-canvas{ width:100%; height:320px; touch-action:none; }
+.anatomy-canvas canvas{ display:block; width:100% !important; height:100% !important; }
+
+.anatomy-fallback{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:8px; text-align:center; padding:24px;
+  background:radial-gradient(circle at 50% 35%, #eef6ff 0%, #dbeafe 60%, #cfe0fb 100%);
+}
+.anatomy-fallback span[aria-hidden]{ font-size:44px; line-height:1; }
+.anatomy-fallback b{ font-size:.95rem; color:var(--ink); }
+.anatomy-fallback p{ margin:0; font-size:12.5px; color:#334155; max-width:42ch; line-height:1.6; }
+.anatomy-fallback .row{ margin-top:8px; }
+
+.anatomy-caption{ font-size:12.5px; color:#334155; line-height:1.65; margin:12px 0 0; }
+.anatomy-pref{ margin-top:12px; font-size:12.5px; color:var(--muted); }
+
+@media (max-width:767px){
+  .anatomy{ padding:14px; }
+  .anatomy-canvas{ height:260px; }
+  .anatomy-stage{ min-height:260px; }
+}

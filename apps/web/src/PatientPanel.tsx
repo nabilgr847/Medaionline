@@ -6,6 +6,7 @@ import { Notifications, Seq, useBadges, Tabs, Chat, ChangePassword, SlotPicker }
 import { PatientCombined, SendReports } from "./v38";
 import { printRx } from "./print";
 import { useTabHistory } from "./tabHistory";
+import { AnatomyCard } from "./anatomy";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPicker, DirectMessages } from "./extras";
 
@@ -17,7 +18,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
   const badges = useBadges(api, "patient");
   useEffect(() => { const f = (e: any) => setTab(e.detail?.kind === "direct" ? "messages" : "appointments"); window.addEventListener("medai-open", f); return () => window.removeEventListener("medai-open", f); }, []);
   return <div>
-    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
+    <Tabs strip="patient" badges={badges} tab={tab} setTab={setTab} tabs={[["appointments", "Appointments"], ["reports", "My reports"], ["combined", "Combined analysis"], ["notifications", "Notifications"], ["messages", "Admin messages"], ["nearby", "Nearby care"], ["rx", "Prescriptions"], ["medicines", "Medicine search"], ["anatomy", "3D anatomy"], ["profile", "Health profile"], ["ai", "AI assistant"], ["account", "Account"]]} />
     {tab === "appointments" && <Appointments api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "reports" && <Reports api={api} token={token} setMessage={setMessage} />}
     {tab === "combined" && <PatientCombined api={api} token={token} setMessage={setMessage} />}
@@ -27,6 +28,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
     {tab === "rx" && <MyPrescriptions api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}
     {tab === "profile" && <Profile api={api} setMessage={setMessage} />}
+    {tab === "anatomy" && <div className="grid"><AnatomyCard /></div>}
     {tab === "ai" && <ChatAI api={api} token={token} setMessage={setMessage} />}
     {tab === "account" && <div className="grid"><ChangePassword api={api} onToken={onToken} setMessage={setMessage} /></div>}
   </div>;

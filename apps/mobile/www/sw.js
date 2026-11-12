@@ -2,6 +2,20 @@
 // Privacy: this app handles medical data, so ONLY same-origin static app files
 // are cached. API calls, uploads, downloads and anything cross-origin are never
 // touched or stored.
+// Tapping a medicine reminder opens (or focuses) MedAI on the tracker.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification?.data?.url || "/", self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (client.url.startsWith(self.location.origin)) return client.focus();
+      }
+      return self.clients.openWindow ? self.clients.openWindow(target) : null;
+    })
+  );
+});
+
 const CACHE = "medai-shell-v6";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/branding/medai-logo.svg"];
 
