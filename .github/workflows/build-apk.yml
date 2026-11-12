@@ -80,18 +80,39 @@ jobs:
 
       - name: Verify both APKs
         run: |
+          set -eu
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           REL=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
           DBG=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          : > /tmp/facts.txt
           for APK in "$REL" "$DBG"; do
             test -f "$APK" || { echo "::error::$APK was not produced"; exit 1; }
             echo "=== $APK ($(stat -c%s "$APK") bytes) ==="
-            "$BT/apksigner" verify --verbose --print-certs "$APK" | tee -a /tmp/certs.txt
+            # 1. the file must be a healthy ZIP
+            unzip -t "$APK" > /tmp/ziptest.txt || { echo "::error::$APK is a corrupt archive"; exit 1; }
+            echo "zip: ok"
+            # 2. resources must be aligned
+            "$BT/zipalign" -c -v 4 "$APK" >/dev/null && echo "zipalign: ok" || { echo "::error::$APK is not zip-aligned"; exit 1; }
+            # 3. signatures, including WHICH schemes are present (v1 is what Android 6 needs)
+            "$BT/apksigner" verify --verbose --print-certs "$APK" | tee -a /tmp/certs.txt > /dev/null
             "$BT/apksigner" verify "$APK" >/dev/null || { echo "::error::$APK is not correctly signed"; exit 1; }
-            "$BT/aapt2" dump badging "$APK" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code|application-label:)" || true
+            "$BT/apksigner" verify --verbose "$APK" | grep -E "^(Verified using|Number of signers)" || true
+            # 4. manifest + sdk levels + abis
+            "$BT/aapt2" dump badging "$APK" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code)" || true
           done
-          "$BT/aapt2" dump badging "$REL" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code)" > /tmp/badging.txt || true
-          cat /tmp/badging.txt
+          "$BT/aapt2" dump badging "$REL" > /tmp/badging-full.txt
+          {
+            echo "versionCode=$(grep -oE "versionCode='[0-9]+'" /tmp/badging-full.txt | head -1 | tr -dc 0-9)"
+            echo "minSdk=$(grep -oE "sdkVersion:'[0-9]+'" /tmp/badging-full.txt | head -1 | tr -dc 0-9)"
+            echo "targetSdk=$(grep -oE "targetSdkVersion:'[0-9]+'" /tmp/badging-full.txt | head -1 | tr -dc 0-9)"
+            echo "abis=$(grep -oE "native-code: .*" /tmp/badging-full.txt | head -1 | sed 's/native-code: //')"
+            echo "signer=$("$BT/apksigner" verify --print-certs "$REL" | grep -m1 "certificate DN" | sed 's/.*DN: //')"
+            echo "cert_sha256=$("$BT/apksigner" verify --print-certs "$REL" | grep -m1 "SHA-256 digest" | awk '{print $NF}')"
+            "$BT/apksigner" verify --verbose "$REL" | grep -E "^Verified using" | sed 's/^/scheme: /'
+            echo "size=$(stat -c%s "$REL")"
+            echo "sha256=$(sha256sum "$REL" | cut -d' ' -f1)"
+          } > /tmp/facts.txt
+          cat /tmp/facts.txt
 
       - name: Publish APK as a release
         env:
@@ -110,35 +131,41 @@ jobs:
           REL_SIZE=$(stat -c%s MedAI-Hospital.apk)
           DBG_SIZE=$(stat -c%s MedAI-Hospital-debug.apk)
           REL_SHA=$(sha256sum MedAI-Hospital.apk | cut -d' ' -f1)
-          CODE=$(grep -o "versionCode='[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
-          MIN=$(grep -o "sdkVersion:'[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
-          ABIS=$(grep -o "native-code: .*" /tmp/badging.txt | head -1 || true)
-          SIGNER=$("$BT/apksigner" verify --print-certs MedAI-Hospital.apk | grep -m1 "certificate DN" | sed 's/.*DN: //' || true)
+          facts() { grep -m1 "^$1=" /tmp/facts.txt | cut -d= -f2- || true; }
+          CODE=$(facts versionCode)
+          MIN=$(facts minSdk)
+          ABIS=$(facts abis)
+          SIGNER=$(facts signer)
+          CERT=$(facts cert_sha256)
+          SCHEMES=$(grep "^scheme:" /tmp/facts.txt | sed 's/scheme: Verified using //' | paste -sd '; ' -)
 
           cat > INSTALL.txt <<EOF
           MedAI Hospital - Android install help
           =====================================
-          Build:        ${{ github.run_number }}
-          Package:      com.medai.hospital
-          versionCode:  $CODE
-          Minimum:      Android $MIN (API $MIN)
-          ABIs:         $ABIS
-          Signed by:    $SIGNER
-          APK size:     $REL_SIZE bytes
-          APK sha256:   $REL_SHA
+          Build:            ${{ github.run_number }}
+          Package:          com.medai.hospital
+          versionCode:      $CODE
+          Minimum Android:  API $MIN
+          Target Android:   API $(facts targetSdk)
+          CPU architectures: $ABIS
+          Signature schemes: $SCHEMES
+          Signed by:        $SIGNER
+          Certificate SHA-256: $CERT
+          APK size:         $REL_SIZE bytes
+          APK sha256:       $REL_SHA
 
-          1) Preferred file: MedAI-Hospital.apk
-             If Android says "app not installed" or "invalid package", try
-             MedAI-Hospital-debug.apk - same app, different packaging.
+          INSTALL
+          1. Uninstall any older MedAI Hospital first (older builds used a different key).
+          2. Download MedAI-Hospital.apk in Chrome, not inside another app.
+          3. Check the file: it must be EXACTLY $REL_SIZE bytes. A different size means the
+             download was cut short - delete it and download again.
+          4. Tap the file -> Install anyway.
 
-          2) Check the download before installing: the file must be exactly
-             $REL_SIZE bytes. A smaller file is an incomplete download
-             (open the link in Chrome, not inside another app).
-
-          3) An older MedAI build signed with a different key blocks the update.
-             Uninstall "MedAI Hospital" first, then install this file.
-
-          4) Android 6.0 or newer is required.
+          IF ANDROID STILL SAYS "INVALID PACKAGE"
+          - Use MedAI-Hospital-debug.apk (same app, different packaging, $DBG_SIZE bytes).
+          - Make sure the phone is at least Android API $MIN.
+          - Check free storage: the installer needs roughly the APK size again.
+          - Do not open the download from a chat app preview - open Chrome's Downloads list.
           EOF
 
           {
@@ -150,11 +177,13 @@ jobs:
             echo "| \`MedAI-Hospital.apk\` | $REL_SIZE bytes | normal install (recommended) |"
             echo "| \`MedAI-Hospital-debug.apk\` | $DBG_SIZE bytes | the phone rejects the release build |"
             echo ""
-            echo "- versionCode \`$CODE\`, minimum Android API \`$MIN\`, signed by $SIGNER"
-            echo "- sha256 \`$REL_SHA\` (see \`SHA256SUMS.txt\`; check details in \`INSTALL.txt\`)"
-            echo "- \"Invalid package\" almost always means an incomplete download: the file must be"
-            echo "  exactly $REL_SIZE bytes. Download it in Chrome, then open it from Downloads."
-            echo "- Updating an older MedAI build? Uninstall it once, then install this file."
+            echo "- versionCode \`$CODE\`, minimum Android API \`$MIN\`, ABIs \`$ABIS\`"
+            echo "- signature schemes: $SCHEMES"
+            echo "- signed by \`$SIGNER\`, certificate SHA-256 \`$CERT\`"
+            echo "- sha256 of the APK: \`$REL_SHA\`"
+            echo "- The file must be exactly **$REL_SIZE bytes**. A different size means an"
+            echo "  incomplete download - download it in Chrome and retry."
+            echo "- Installing over an older MedAI build? Uninstall it once first."
           } >> apps/mobile/RELEASE_NOTES_ANDROID.md
 
           gh release delete apk-latest --yes --cleanup-tag --repo "$REPO" || true
