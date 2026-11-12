@@ -22,6 +22,32 @@ Rules that follow from this:
 - The sign-in screen's **Test connection** button reports which one of the four states the
   address is in: reachable / blocks this app (CORS) / is the website, not the API / no answer.
 
+## Android APK will not install ("invalid package" / "app not installed")
+
+The release tag `apk-latest` publishes two installable files plus proof of integrity:
+
+| Asset | Meaning |
+|---|---|
+| `MedAI-Hospital.apk` | release build (use this first) |
+| `MedAI-Hospital-debug.apk` | same app, debug packaging — the fallback when a phone's installer rejects the release file |
+| `SHA256SUMS.txt` | sha256 of both files |
+| `INSTALL.txt` | size, versionCode, minimum Android API, ABIs, signer DN and the sha256 |
+
+Rules that solve nearly every case:
+
+1. **"Invalid package"** = the file itself is broken or incomplete. The size must match
+   `INSTALL.txt` exactly; a smaller file is a partial download. Download in Chrome and open
+   it from *Downloads* — downloading inside another app (Telegram/WhatsApp preview) can save
+   an HTML page with an `.apk` name.
+2. **"App not installed"** = signature conflict with an older MedAI build → uninstall the old
+   app once, then install. Every build is signed with `apps/mobile/medai-release.jks`, so from
+   then on updates install over each other.
+3. Every CI run verifies the APK with `apksigner verify` (v1+v2+v3 signatures) and compares the
+   uploaded file byte-for-byte with the built one, so a corrupt upload cannot be published.
+4. `extractNativeLibs` is forced on and legacy packaging is enabled, which older OEM installers
+   need; if a phone still refuses, install `MedAI-Hospital-debug.apk`.
+5. Android 6.0 (API 23) or newer is required — `INSTALL.txt` always states the exact minimum.
+
 ## Sign-in screen: connection diagnostics and biometric login
 
 - The `Server:` / `Test connection` / `Server address` block is **hidden** on the public

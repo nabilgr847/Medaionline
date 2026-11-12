@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# Only one build may publish the release at a time; a second run waits.
+concurrency:
+  group: apk-publish
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -64,48 +69,116 @@ jobs:
           python3 scripts/patch_android.py
           npx cap sync android
 
-      - name: Build APK
+      - name: Build APKs
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          # Release build, signed with the key committed in apps/mobile/medai-release.jks.
-          # A release APK installs and updates cleanly on every phone; debug builds signed
-          # with a machine-local key are what produced "app not installed / package invalid".
-          ./gradlew assembleRelease --no-daemon
+          # Both build types are signed with the key committed in apps/mobile/medai-release.jks.
+          # A release APK is the normal download; the debug one is a fallback if a phone's
+          # installer dislikes it (some OEM installers do).
+          ./gradlew assembleRelease assembleDebug --no-daemon
 
-      - name: Verify the APK is properly signed
+      - name: Verify both APKs
         run: |
-          APK=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
-          test -f "$APK" || { echo "::error::release APK was not produced"; exit 1; }
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          echo "--- signature ---"
-          "$BT/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
-          echo "--- package info ---"
-          "$BT/aapt2" dump badging "$APK" | grep -E "^(package|sdkVersion|targetSdkVersion|application-label)" | tee /tmp/badging.txt
-          "$BT/apksigner" verify "$APK" >/dev/null || { echo "::error::APK is not correctly signed"; exit 1; }
-          code=$(grep -o "versionCode='[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
-          {
-            echo ""
-            echo "## Install help"
-            echo ""
-            echo "- APK: release build, ${{ github.run_number }}"
-            echo "- versionCode: ${code:-unknown}"
-            echo "- Signed by: $(grep -m1 'Signer #1 certificate DN' /tmp/certs.txt | cut -d: -f2- | xargs || echo 'MedAI')"
-            echo "- If Android says \"app not installed\" or \"package appears invalid\", an older"
-            echo "  MedAI build signed with a different key is still installed."
-            echo "  Uninstall MedAI Hospital first (it is only the previous APK), then install this file."
-            echo "- The APK needs Android 6.0 or newer."
-          } >> apps/mobile/RELEASE_NOTES_ANDROID.md
+          REL=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          DBG=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          for APK in "$REL" "$DBG"; do
+            test -f "$APK" || { echo "::error::$APK was not produced"; exit 1; }
+            echo "=== $APK ($(stat -c%s "$APK") bytes) ==="
+            "$BT/apksigner" verify --verbose --print-certs "$APK" | tee -a /tmp/certs.txt
+            "$BT/apksigner" verify "$APK" >/dev/null || { echo "::error::$APK is not correctly signed"; exit 1; }
+            "$BT/aapt2" dump badging "$APK" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code|application-label:)" || true
+          done
+          "$BT/aapt2" dump badging "$REL" | grep -E "^(package|sdkVersion|targetSdkVersion|native-code)" > /tmp/badging.txt || true
+          cat /tmp/badging.txt
 
       - name: Publish APK as a release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk MedAI-Hospital.apk
-          gh release delete apk-latest --yes --cleanup-tag --repo "${{ github.repository }}" || true
-          gh release create apk-latest MedAI-Hospital.apk --repo "${{ github.repository }}" \
+          set -eu
+          REPO="${{ github.repository }}"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          REL=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          DBG=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          cp "$REL" MedAI-Hospital.apk
+          cp "$DBG" MedAI-Hospital-debug.apk
+          sha256sum MedAI-Hospital.apk MedAI-Hospital-debug.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          REL_SIZE=$(stat -c%s MedAI-Hospital.apk)
+          DBG_SIZE=$(stat -c%s MedAI-Hospital-debug.apk)
+          REL_SHA=$(sha256sum MedAI-Hospital.apk | cut -d' ' -f1)
+          CODE=$(grep -o "versionCode='[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
+          MIN=$(grep -o "sdkVersion:'[0-9]*'" /tmp/badging.txt | head -1 | tr -dc 0-9)
+          ABIS=$(grep -o "native-code: .*" /tmp/badging.txt | head -1 || true)
+          SIGNER=$("$BT/apksigner" verify --print-certs MedAI-Hospital.apk | grep -m1 "certificate DN" | sed 's/.*DN: //' || true)
+
+          cat > INSTALL.txt <<EOF
+          MedAI Hospital - Android install help
+          =====================================
+          Build:        ${{ github.run_number }}
+          Package:      com.medai.hospital
+          versionCode:  $CODE
+          Minimum:      Android $MIN (API $MIN)
+          ABIs:         $ABIS
+          Signed by:    $SIGNER
+          APK size:     $REL_SIZE bytes
+          APK sha256:   $REL_SHA
+
+          1) Preferred file: MedAI-Hospital.apk
+             If Android says "app not installed" or "invalid package", try
+             MedAI-Hospital-debug.apk - same app, different packaging.
+
+          2) Check the download before installing: the file must be exactly
+             $REL_SIZE bytes. A smaller file is an incomplete download
+             (open the link in Chrome, not inside another app).
+
+          3) An older MedAI build signed with a different key blocks the update.
+             Uninstall "MedAI Hospital" first, then install this file.
+
+          4) Android 6.0 or newer is required.
+          EOF
+
+          {
+            echo ""
+            echo "## Download"
+            echo ""
+            echo "| File | Size | Use it when |"
+            echo "| --- | --- | --- |"
+            echo "| \`MedAI-Hospital.apk\` | $REL_SIZE bytes | normal install (recommended) |"
+            echo "| \`MedAI-Hospital-debug.apk\` | $DBG_SIZE bytes | the phone rejects the release build |"
+            echo ""
+            echo "- versionCode \`$CODE\`, minimum Android API \`$MIN\`, signed by $SIGNER"
+            echo "- sha256 \`$REL_SHA\` (see \`SHA256SUMS.txt\`; check details in \`INSTALL.txt\`)"
+            echo "- \"Invalid package\" almost always means an incomplete download: the file must be"
+            echo "  exactly $REL_SIZE bytes. Download it in Chrome, then open it from Downloads."
+            echo "- Updating an older MedAI build? Uninstall it once, then install this file."
+          } >> apps/mobile/RELEASE_NOTES_ANDROID.md
+
+          gh release delete apk-latest --yes --cleanup-tag --repo "$REPO" || true
+          for i in 1 2 3; do
+            if gh release view apk-latest --repo "$REPO" >/dev/null 2>&1; then sleep 3; else break; fi
+          done
+          gh release create apk-latest MedAI-Hospital.apk MedAI-Hospital-debug.apk SHA256SUMS.txt INSTALL.txt \
+            --repo "$REPO" \
             --title "MedAI Hospital Android APK" \
             --notes-file apps/mobile/RELEASE_NOTES_ANDROID.md
+
+      - name: Prove the uploaded file is intact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p /tmp/roundtrip
+          gh release download apk-latest --pattern "MedAI-Hospital.apk" --dir /tmp/roundtrip --clobber --repo "${{ github.repository }}"
+          LOCAL=$(sha256sum MedAI-Hospital.apk | cut -d' ' -f1)
+          REMOTE=$(sha256sum /tmp/roundtrip/MedAI-Hospital.apk | cut -d' ' -f1)
+          echo "local=$LOCAL"
+          echo "remote=$REMOTE"
+          [ "$LOCAL" = "$REMOTE" ] || { echo "::error::the published APK differs from the built one (corrupt upload)"; exit 1; }
+          echo "Published APK verified byte-for-byte."
 
       - uses: actions/upload-artifact@v4
         with:
