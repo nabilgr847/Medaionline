@@ -97,7 +97,7 @@ export function useBadges(api: Api, role: "patient" | "doctor" | "admin"): Recor
         if (role !== "admin") next.messages = unread.filter((n: any) => n.type === "direct_message").reduce((s: number,n:any)=>s+(n.count||1),0);
         const direct = unread.filter((n: any) => n.type === "direct_message").reduce((s: number, n: any) => s + (n.count || 1), 0);
         if (direct) next.messages = direct;
-        if (role === "doctor") { const d = await api("/doctor/unassigned-appointment-requests"); next.requests = (d.requests || []).length; }
+        if (role === "doctor") { const d = await api("/doctor/unassigned-appointment-requests"); next.requests = (d.requests || []).length; const pr = await api("/doctor/pain-reports"); next.bodypain = (pr.reports || []).filter((r: any) => r.status === "new").length; }
         if (role === "admin") { const d = await api("/admin/doctors/pending"); next.doctors = (d.applications || []).length; const r = await api("/admin/password-requests?status=pending"); next.resets = (r.requests || []).length; const sg = await api("/admin/recent-signups"); next.resets += (sg.users || []).filter((u: any) => u.status === "pending_approval").length; }
       } catch { /* badges are best-effort */ }
       if (live) setB(next);

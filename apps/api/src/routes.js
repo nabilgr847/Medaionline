@@ -19,7 +19,7 @@ import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from 
 import { z } from "zod";
 import { callAI, parseJsonLoose, pingAI } from "./ai.js";
 import { installV38, cleanClinical, clinicalForSigning, makeSecretCode } from "./v38.js";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit, PainReport } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
@@ -1389,6 +1389,72 @@ router.post("/reports/:id/review",auth,allow("doctor"),wrap(async(req,res)=>{
 }));
 // Role-to-role direct messaging (doctor/admin and patient/admin). Files remain private.
 function pairKey(a,b){return [String(a),String(b)].sort().join(":");}
+// ---------- 3D body map pain reports ----------
+// A patient taps a spot on the 3D body model and sends it to one chosen doctor.
+// This is a message with a body location, never a diagnosis; red flags are screened
+// locally by rule (safety.js) and returned with the report so the doctor sees them.
+router.post("/pain-reports",auth,allow("patient"),mkLimiter(60,30,"Too many pain reports. Please wait a little."),wrap(async(req,res)=>{
+  const s=z.object({
+    doctorId:z.string().min(6),
+    bodyPart:z.string().min(2).max(160),
+    partId:z.number().int().min(0).max(100000).optional(),
+    system:z.string().max(40).optional(),
+    severity:z.number().int().min(1).max(10),
+    sinceDays:z.number().int().min(0).max(3650).default(0),
+    note:z.string().max(1000).optional()
+  }).safeParse(req.body);
+  if(!s.success) return res.status(400).json({error:"Choose a body part and how bad the pain is (1-10)."});
+  if(!mongoose.isValidObjectId(s.data.doctorId)) return res.status(400).json({error:"Choose a doctor to send this to."});
+  const doctor=await User.findOne({_id:s.data.doctorId,role:"doctor",status:"active"}).select("name");
+  if(!doctor) return res.status(400).json({error:"That doctor is not available right now. Please choose another."});
+  const note=String(s.data.note||"").trim();
+  const safety=checkRedFlags(note);
+  const report=await PainReport.create({
+    patientId:req.user.id,
+    doctorId:doctor._id,
+    bodyPart:s.data.bodyPart,
+    partId:s.data.partId ?? null,
+    system:String(s.data.system||"").slice(0,40),
+    severity:s.data.severity,
+    sinceDays:s.data.sinceDays,
+    note,
+    urgency:safety.level
+  });
+  await audit(req,"pain_report.sent","PainReport",report.id);
+  await notify(doctor._id,"pain_report","New body-map pain report",
+    `${req.user.name} marked pain at "${report.bodyPart}" (${report.severity}/10)${report.urgency!=="routine"?" — red flags: "+report.urgency:""}. Open Body-map reports to see the details.`,
+    "PainReport",report.id);
+  res.status(201).json({report,safety});
+}));
+router.get("/pain-reports/mine",auth,allow("patient"),wrap(async(req,res)=>{
+  const reports=await PainReport.find({patientId:req.user.id}).populate("doctorId","name doctorProfile.specialty").sort({createdAt:-1}).limit(50);
+  res.json({reports});
+}));
+router.get("/doctor/pain-reports",auth,allow("doctor"),wrap(async(req,res)=>{
+  const filter={doctorId:req.user.id};
+  if(["new","acknowledged","replied"].includes(String(req.query.status||""))) filter.status=req.query.status;
+  const reports=await PainReport.find(filter).populate("patientId","name phone gender dateOfBirth").sort({createdAt:-1}).limit(100);
+  res.json({reports});
+}));
+router.post("/pain-reports/:id/acknowledge",auth,allow("doctor"),wrap(async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({error:"Pain report not found"});
+  const reply=String(req.body?.reply||"").trim().slice(0,1000);
+  const report=await PainReport.findOneAndUpdate(
+    {_id:req.params.id,doctorId:req.user.id},
+    {$set:{status:reply?"replied":"acknowledged",doctorReply:reply,acknowledgedAt:new Date()}},
+    {new:true}
+  );
+  if(!report) return res.status(404).json({error:"Pain report not found"});
+  await audit(req,"pain_report.acknowledged","PainReport",report.id);
+  await notify(report.patientId,"pain_report_reply","Your doctor saw your pain report",
+    `Dr. ${req.user.name} reviewed your report for "${report.bodyPart}".${reply?" Message: "+reply:""}`,
+    "PainReport",report.id);
+  res.json({report});
+}));
+router.get("/admin/pain-reports",auth,allow("admin"),wrap(async(req,res)=>{
+  const reports=await PainReport.find({}).populate("patientId","name").populate("doctorId","name").sort({createdAt:-1}).limit(100);
+  res.json({reports});
+}));
 router.get("/direct-conversations/mine",auth,wrap(async(req,res)=>{
   let rows=await DirectConversation.find({participants:req.user.id}).populate("participants","name role email").sort({lastMessageAt:-1}).limit(100).lean();
   if(req.user.role!=="admin"){

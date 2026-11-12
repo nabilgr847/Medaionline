@@ -402,3 +402,26 @@ const medicineIntakeLogSchema = new Schema({
 },{timestamps:true});
 medicineIntakeLogSchema.index({patientId:1,takenAt:-1});
 export const MedicineIntakeLog = model("MedicineIntakeLog",medicineIntakeLogSchema);
+
+// ================= 3D BODY MAP → PAIN REPORT (sent to a chosen doctor) =================
+
+const painReportSchema = new Schema({
+  patientId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  doctorId:{type:Schema.Types.ObjectId,ref:"User",required:true,index:true},
+  // Anatomical name picked from the 3D model, e.g. "Left femur" or "Stomach".
+  bodyPart:{type:String,required:true,trim:true,maxlength:160},
+  // Index into public/anatomy/body.parts.json, kept so a doctor can highlight the exact spot later.
+  partId:{type:Number,min:0,default:null},
+  system:{type:String,default:"",maxlength:40},
+  severity:{type:Number,required:true,min:1,max:10},
+  sinceDays:{type:Number,min:0,max:3650,default:0},
+  note:{type:String,default:"",maxlength:1000},
+  // Red-flag screening result (never a diagnosis): "routine" | "urgent" | "emergency".
+  urgency:{type:String,enum:["routine","urgent","emergency"],default:"routine"},
+  status:{type:String,enum:["new","acknowledged","replied"],default:"new",index:true},
+  doctorReply:{type:String,default:"",maxlength:1000},
+  acknowledgedAt:Date
+},{timestamps:true});
+painReportSchema.index({doctorId:1,status:1,createdAt:-1});
+painReportSchema.index({patientId:1,createdAt:-1});
+export const PainReport = model("PainReport",painReportSchema);

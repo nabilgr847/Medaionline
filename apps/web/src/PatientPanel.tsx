@@ -7,6 +7,7 @@ import { PatientCombined, SendReports } from "./v38";
 import { printRx } from "./print";
 import { useTabHistory } from "./tabHistory";
 import { AnatomyCard } from "./anatomy";
+import { BodyMapCard } from "./body3d";
 import TeleVisitCall from "./TeleVisitCall";
 import { DoctorPicker, DirectMessages } from "./extras";
 
@@ -29,6 +30,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}
     {tab === "profile" && <Profile api={api} setMessage={setMessage} />}
     {tab === "anatomy" && <div className="grid"><AnatomyCard /></div>}
+    {tab === "bodymap" && <BodyMapCard api={api} token={token} setMessage={setMessage} />}
     {tab === "ai" && <ChatAI api={api} token={token} setMessage={setMessage} />}
     {tab === "account" && <div className="grid"><ChangePassword api={api} onToken={onToken} setMessage={setMessage} /></div>}
   </div>;

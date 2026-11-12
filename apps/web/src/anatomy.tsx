@@ -126,15 +126,15 @@ const ORGANS: OrganInfo[] = [
 const WIFI_KEY = "medai_3d_wifi_only";
 const BEST_KEY = "medai_anatomy_best";
 
-const wifiOnly = (): boolean => {
+export const wifiOnly = (): boolean => {
   try { return localStorage.getItem(WIFI_KEY) !== "0"; } catch { return true; }
 };
-const setWifiOnly = (on: boolean) => {
+export const setWifiOnly = (on: boolean) => {
   try { on ? localStorage.removeItem(WIFI_KEY) : localStorage.setItem(WIFI_KEY, "0"); } catch { /* ignore */ }
 };
 
 /** True when the phone is on a slow or metered connection. */
-function looksMetered(): boolean {
+export function looksMetered(): boolean {
   try {
     const c: any = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
     if (!c) return false;
@@ -143,7 +143,7 @@ function looksMetered(): boolean {
   } catch { return false; }
 }
 
-function webglAvailable(): boolean {
+export function webglAvailable(): boolean {
   try {
     const c = document.createElement("canvas");
     return !!(window.WebGLRenderingContext && (c.getContext("webgl") || c.getContext("experimental-webgl")));
