@@ -10,6 +10,7 @@ import { DoctorPhoto, DirectMessages } from "./extras";
 import { parseMedaiCode } from "./QrScanner";
 import { QrScanBox, SecretQr } from "./qr";
 import { DoctorPatients } from "./records";
+import { DoctorBodyReports } from "./body3d";
 
 const PRESCRIBABLE = ["awaiting_records", "awaiting_tests", "confirmed", "waiting_room", "in_progress", "completed", "follow_up_required"];
 const SCHEDULABLE = ["requested", "awaiting_records", "awaiting_tests", "follow_up_required"];
@@ -29,6 +30,7 @@ export default function DoctorPanel({ api, token, user, onToken, setMessage }: {
     {tab === "rx" && <PrescriptionList api={api} token={token} setMessage={setMessage} />}
     {tab === "scan" && <div className="grid"><article className="full"><h3>📷 Scan QR</h3><QrScanBox api={api} token={token} setMessage={setMessage} /></article></div>}
     {tab === "patients" && <DoctorPatients api={api} token={token} setMessage={setMessage} />}
+    {tab === "bodypain" && <DoctorBodyReports api={api} setMessage={setMessage} />}
     {tab === "reports" && <DoctorReportReview api={api} token={token} setMessage={setMessage} />}
     {tab === "combined" && <DoctorCombined api={api} setMessage={setMessage} />}
     {tab === "notifications" && <Notifications api={api} setMessage={setMessage} />}

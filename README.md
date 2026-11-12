@@ -8,6 +8,7 @@ See `CHANGELOG_V3_6_4_GUEST_ROOM.md` for the latest guest-room changes and `docs
 
 ## Included modules
 - Separate Patient, Doctor and Admin roles
+- Full-body 3D pain map (BodyParts3D, CC BY 4.0) — tap the spot that hurts and send it to a chosen doctor
 - Patient registration/login and profile API
 - Doctor application with private document/photo upload
 - Admin doctor-verification queue and approve/reject actions

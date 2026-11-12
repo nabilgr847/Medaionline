@@ -860,3 +860,31 @@ footer .emergency a{ color:#b91c1c; font-weight:700; text-decoration:none; }
   .anatomy-hotspot{ padding:0; width:44px; height:44px; justify-content:center; }
   .anatomy-hotspot i{ width:12px; height:12px; flex:0 0 12px; }
 }
+
+/* ---------- Full-body 3D pain map (BodyParts3D, CC BY 4.0) ---------- */
+.bodymap .bodymap-start{ display:grid; gap:10px; justify-items:start; margin:14px 0; }
+.bodymap .bodymap-start progress{ width:100%; max-width:320px; height:10px; }
+.bodymap-stage{ position:relative; margin:12px 0 6px; border:1px solid var(--line); border-radius:16px;
+  background:radial-gradient(120% 90% at 50% 0%, #1d2a44 0%, #0f172a 60%, #0b1220 100%); overflow:hidden; }
+.bodymap-stage.hidden{ display:none; }
+.bodymap-canvas{ width:100%; height:min(62vh, 460px); min-height:300px; }
+.bodymap-canvas canvas{ display:block; width:100% !important; height:100% !important; }
+.bodymap-tools{ position:absolute; right:8px; top:8px; display:flex; flex-direction:column; gap:6px; }
+.bodymap-tools button{ min-width:40px; min-height:40px; padding:0 10px; font-size:15px; line-height:1;
+  background:rgba(255,255,255,.9); border:1px solid rgba(255,255,255,.35); color:#0f172a; border-radius:12px; }
+.bodymap-hint{ position:absolute; left:10px; bottom:8px; margin:0; font-size:11.5px; color:#cbd5e1; }
+.bodymap-layers{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0 4px; }
+.bodymap-layers .chip.off{ opacity:.45; text-decoration:line-through; }
+.bodymap-form{ display:grid; gap:12px; margin-top:12px; }
+.bodymap-picked{ font-size:14px; padding:8px 10px; background:var(--brand-soft); border-radius:10px; }
+.bodymap-form input[type="range"]{ width:100%; height:36px; accent-color:var(--brand); }
+.notice.danger{ border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+button.linkish{ background:none; border:0; padding:0 4px; min-height:auto; color:var(--brand, #2563eb); text-decoration:underline; font-size:13px; }
+.bodymap-attribution{ margin-top:14px; font-size:12.5px; color:var(--muted); }
+.bodymap-attribution summary{ cursor:pointer; font-weight:600; color:#475569; }
+.bodymap-attribution p{ margin:6px 0; }
+@media (max-width: 767px){
+  .bodymap-canvas{ height:min(56vh, 380px); min-height:280px; }
+  .bodymap-tools button{ min-width:44px; min-height:44px; }
+  .bodymap-layers .chip{ min-height:44px; padding:10px 14px; }
+}

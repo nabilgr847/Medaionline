@@ -9,3 +9,6 @@ storage/
 .DS_Store
 coverage/
 tsconfig.tsbuildinfo
+
+# Downloaded anatomy source pack (33 MB) — rebuild with scripts/anatomy/build-anatomy-model.mjs
+.cache/
