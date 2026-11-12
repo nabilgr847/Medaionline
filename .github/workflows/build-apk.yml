@@ -73,6 +73,28 @@ jobs:
           python3 scripts/patch_android.py
           npx cap sync android
 
+      - name: Verify the crash guard is in the Android project
+        # "Installs but closes immediately" can only be fixed when the APK carries a guard that
+        # records and shows the failure, so the build refuses to continue without it.
+        run: |
+          set -eu
+          M=apps/mobile/android/app/src/main
+          grep -q 'android:name=".MedAIApplication"' "$M/AndroidManifest.xml" \
+            || { echo "::error::the manifest does not install MedAIApplication (no crash guard)"; exit 1; }
+          grep -q 'CrashReportActivity' "$M/AndroidManifest.xml" \
+            || { echo "::error::the crash report screen is missing from the manifest"; exit 1; }
+          for f in MainActivity MedAIApplication CrashReportActivity; do
+            if ! find "$M/java" -name "$f.java" | grep -q .; then
+              echo "::error::$f.java was not written into the Android project"; exit 1
+            fi
+            if grep -q "__PACKAGE__" $(find "$M/java" -name "$f.java"); then
+              echo "::error::$f.java still contains the __PACKAGE__ placeholder"; exit 1
+            fi
+          done
+          grep -q "catch (Throwable" $(find "$M/java" -name MainActivity.java) \
+            || { echo "::error::MainActivity does not guard its start-up"; exit 1; }
+          echo "Crash guard present in the Android project."
+
       - name: Build APKs
         working-directory: apps/mobile/android
         run: |
@@ -81,6 +103,21 @@ jobs:
           # A release APK is the normal download; the debug one is a fallback if a phone's
           # installer dislikes it (some OEM installers do).
           ./gradlew assembleRelease assembleDebug --no-daemon
+
+      - name: Verify the guard is compiled into the APKs
+        # The sources existing is not enough: the classes must really be inside the dex files.
+        run: |
+          set -eu
+          for APK in app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/debug/app-debug.apk; do
+            unzip -p "apps/mobile/android/$APK" 'classes*.dex' > /tmp/all.dex
+            for CLASS in MedAIApplication CrashReportActivity; do
+              if ! grep -aq "$CLASS" /tmp/all.dex; then
+                echo "::error::$APK does not contain $CLASS - the crash guard was not compiled in"
+                exit 1
+              fi
+            done
+            echo "$APK carries the crash guard."
+          done
 
       - name: Verify both APKs
         run: |

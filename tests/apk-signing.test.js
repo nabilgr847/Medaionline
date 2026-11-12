@@ -48,7 +48,10 @@ function fixture() {
   mkdirSync(join(mobile, "scripts"), { recursive: true });
   mkdirSync(join(mobile, "native"), { recursive: true });
   cpSync(SCRIPT, join(mobile, "scripts/patch_android.py"));
-  cpSync(join(repo, "apps/mobile/native/MainActivity.java.tpl"), join(mobile, "native/MainActivity.java.tpl"));
+  for (const name of ["MainActivity", "MedAIApplication", "CrashReportActivity"]) {
+    cpSync(join(repo, `apps/mobile/native/${name}.java.tpl`), join(mobile, `native/${name}.java.tpl`));
+  }
+  cpSync(join(repo, "apps/mobile/capacitor.config.json"), join(mobile, "capacitor.config.json"));
   cpSync(join(repo, "apps/mobile/medai-release.jks"), join(mobile, "medai-release.jks"));
 
   const main = join(mobile, "android/app/src/main");
@@ -93,6 +96,21 @@ test("a whitespace-only secret is treated as unset", () => {
   const { mobile, buildGradle } = fixture();
   run(mobile, { MEDAI_STORE_PASSWORD: "   " });
   assert.match(readFileSync(buildGradle, "utf8"), /storePassword "medaiapp2026"/);
+});
+
+test("the same run also installs the start-up crash guard", () => {
+  const { mobile } = fixture();
+  run(mobile, { MEDAI_STORE_PASSWORD: "" });
+  const manifest = readFileSync(join(mobile, "android/app/src/main/AndroidManifest.xml"), "utf8");
+  assert.match(manifest, /android:name="\.MedAIApplication"/, "the guard runs before any activity");
+  assert.match(manifest, /android:process=":crash"/, "the report screen is in its own process");
+  for (const name of ["MainActivity", "MedAIApplication", "CrashReportActivity"]) {
+    const path = join(mobile, "android/app/src/main/java/com/medai/hospital", `${name}.java`);
+    assert.ok(existsSync(path), `${name}.java was not written into the app package`);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /__PACKAGE__/, `${name}.java kept the placeholder`);
+  }
+  assert.match(readFileSync(join(mobile, "android/app/src/main/java/com/medai/hospital/MainActivity.java"), "utf8"),
+    /catch \(Throwable/, "MainActivity guards its own start-up");
 });
 
 test("the workflow hands the secret to the patch step", () => {
