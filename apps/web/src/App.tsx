@@ -2,6 +2,9 @@
 import { AdminRecovery } from "./v38";
 import { useEffect, useState } from "react";
 import { makeApi, json, API, pingServer, setApiBase, clearApiBase } from "./api";
+import { HomeHero } from "./hero";
+import { AdSlot, setAdsHidden, useAdsHidden } from "./ads";
+import { useView } from "./viewport";
 import PatientPanel from "./PatientPanel";
 import DoctorPanel from "./DoctorPanel";
 import AdminPanel from "./AdminPanel";
@@ -120,6 +123,8 @@ function MainApp() {
     setServerBusy(false);
   }
   const nativeApp = isNativeApp();
+  const viewKind = useView();          // phone / tablet / desktop layouts
+  const adsOff = useAdsHidden();
   const [bio, setBio] = useState<{ available: boolean; type: string; reason?: string }>({ available: false, type: "none" });
   const [bioBusy, setBioBusy] = useState(false);
   const [bioNote, setBioNote] = useState("");
@@ -283,6 +288,9 @@ function MainApp() {
             <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("services")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">✚</span>Services</button>
             <button className="draweritem" onClick={() => { setMenuOpen(false); document.getElementById("safety")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">🛡️</span>Safety &amp; privacy</button>
             {!user && <button className="draweritem" onClick={() => { setMenuOpen(false); setView("apply"); }}><span aria-hidden="true">👨‍⚕️</span>Apply for a doctor account</button>}
+            <button className="draweritem" onClick={() => setAdsHidden(!adsOff)} aria-pressed={!adsOff}>
+              <span aria-hidden="true">📣</span>{adsOff ? "Show sponsored cards" : "Hide sponsored cards"}
+            </button>
           </div>
 
           <div className="drawerfoot">
@@ -296,7 +304,9 @@ function MainApp() {
     {!user && view === "apply" && <DoctorApply mode="new" onBack={() => setView("home")} />}
     {!user && view === "more" && <DoctorApply mode="more" onBack={() => setView("home")} />}
     {!user && view === "home" && <>
-      <BannerSlider banner={banner} where="home" />
+      <HomeHero banner={banner} signedIn={false}
+        onPrimary={() => document.getElementById("portal")?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+      <div className="home-ad"><AdSlot placement="home" variant={viewKind === "mobile" ? "wide" : "rail"} /></div>
       <section className="auth" id="portal"><div>
         <h2>{step === "code" ? "Verify your email" : step === "reset" ? "Reset your password" : mode === "login" ? "Welcome back" : "Create your patient account"}</h2>
                 {step === "form" && <>
@@ -369,6 +379,7 @@ function MainApp() {
     {user && <section className="dashboard" id="dashboard"><div className="welcome"><div><span className="eyebrow">{user.role.toUpperCase()} PORTAL</span><h1>Hello, {user.name}</h1><p>{user.role === "admin" ? "Platform operations and verification workspace" : user.role === "doctor" ? "Clinician workspace" : "Your health dashboard"}</p></div><span className="role">{user.role}</span></div>
       {message && <p className="notice" onClick={() => setMessage("")}>{message} <small>(tap to dismiss)</small></p>}
       {user.role !== "admin" && <BannerSlider banner={banner} compact where={user.role} />}
+      {user.role !== "admin" && <AdSlot placement="dashboard" variant="wide" />}
       {user.role === "patient" && <PatientPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "doctor" && <DoctorPanel api={api} token={token} user={user} onToken={setToken} setMessage={setMessage} />}
       {user.role === "admin" && <AdminPanel api={api} user={user} token={token} onToken={setToken} setMessage={setMessage} />}

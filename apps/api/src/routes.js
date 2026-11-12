@@ -1567,6 +1567,44 @@ async function loadBanner(){
   return {active:v.active!==false,intervalSec:5,slides:[{...SLIDE_DEFAULT,...v}]};
 }
 router.get("/banner",wrap(async(_req,res)=>{res.set("Cache-Control","public, max-age=60");res.json({banner:await loadBanner()});}));
+
+// ======================= SPONSORED CARDS / ADS =======================
+// A medical app must never show a misleading ad: everything here is labelled
+// "Sponsored", never mixes with clinical content, and admin can switch the whole
+// feature off. Stored as one Setting document, like the banner.
+const { adSchema, adsSchema, ADS_DEFAULT, loadAds, adsForScreen } = await import("./ads.js");
+router.get("/ads",wrap(async(req,res)=>{
+  const placement=["home","dashboard","chat"].includes(String(req.query.placement))?String(req.query.placement):"home";
+  const limit=Math.min(Math.max(Number(req.query.limit)||2,1),3);
+  res.set("Cache-Control","public, max-age=60");
+  const ads=await loadAds();
+  res.json({enabled:ads.enabled,note:ads.note,ads:adsForScreen(ads,placement,limit)});
+}));
+// Aggregate click counter only - no user id, no cookies, nothing that identifies a patient.
+router.post("/ads/:id/click",wrap(async(req,res)=>{
+  const { recordAdClick } = await import("./ads.js");
+  await recordAdClick(req.params.id);
+  res.json({ok:true});
+}));
+router.get("/admin/ads",auth,allow("admin"),wrap(async(_req,res)=>res.json({ads:await loadAds()})));
+router.put("/admin/ads",auth,allow("admin"),wrap(async(req,res)=>{
+  // Counters are server-side only; ignore anything the client sends for them.
+  const p=adsSchema.safeParse({enabled:req.body?.enabled!==false,note:req.body?.note||"",items:req.body?.items||[]});
+  if(!p.success)return res.status(400).json({error:p.error.issues[0]?.message||"Invalid ad settings"});
+  const existing=await Setting.findOne({key:"ads"}).lean();
+  const clicks=(existing?.value&&existing.value.clicks)||{};
+  const items=p.data.items.map((a,i)=>({...a,id:a.id||`ad_${Date.now()}_${i}`}));
+  const value={enabled:p.data.enabled,note:p.data.note,items,clicks};
+  await Setting.findOneAndUpdate({key:"ads"},{value,updatedBy:req.user.id},{upsert:true,new:true});
+  await audit(req,"admin.ads_update","Setting","ads",{items:items.length,enabled:value.enabled});
+  res.json({message:value.enabled?`Saved ${items.length} sponsored card(s)`:"Ads are switched off",ads:{...value}});
+}));
+router.delete("/admin/ads",auth,allow("admin"),wrap(async(req,res)=>{
+  await Setting.deleteOne({key:"ads"});
+  await audit(req,"admin.ads_reset","Setting","ads");
+  res.json({message:"Ads reset",ads:ADS_DEFAULT});
+}));
+
 // --- Admin: all patient reports, downloads and doctor assignment ---
 const REVIEW_PENDING=["pending_doctor_review","under_review","changes_requested"],REVIEW_APPROVED=["approved","signed","delivered"];
 router.get("/admin/reports",auth,allow("admin"),wrap(async(req,res)=>{
