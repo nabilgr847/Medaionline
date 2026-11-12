@@ -19,9 +19,10 @@ import { makeTextPdf, makeReportPdf, makePrescriptionPdf, PDF_HAS_BANGLA } from 
 import { z } from "zod";
 import { callAI, parseJsonLoose, pingAI } from "./ai.js";
 import { installV38, cleanClinical, clinicalForSigning, makeSecretCode } from "./v38.js";
-import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit, PainReport } from "./models.js";
+import { User, PrivateFile, Appointment, Message, AuditEvent, Medicine, Prescription, CallSignal, MedicalReport, Notification, ChatSession, DirectConversation, DirectMessage, TemporaryConsult, TemporaryCallSignal, SystemError, CallSession, Setting, ResetRequest, MultiAnalysis, AccessAudit, PainReport, WebAuthnCredential } from "./models.js";
 import { auth, allow, hashPassword, verifyPassword, makeToken, audit } from "./security.js";
 import { config } from "./config.js";
+import { RP, registrationOptions, registrationVerify, authenticationOptions, authenticationVerify, listCredentials, countCredentials } from "./webauthn.js";
 import { resolveStoredFilePath, readStoredFileBuffer, storeGridFSBuffer, deleteGridFSFile } from "./fileStorage.js";
 
 const router = express.Router();
@@ -159,6 +160,58 @@ router.post("/auth/login", loginLimiter, wrap(async(req,res)=>{
   user.lastLoginAt=new Date(); user.lastSeenAt=new Date(); await user.save();
   await audit(req,"auth.login","User",user.id);
   res.json({token,user:{id:user.id,name:user.name,email:user.email,role:user.role}});
+}));
+
+// ---------- browser fingerprint / face sign-in (WebAuthn) ----------
+// Passkey for the website: Windows Hello, Touch ID, Android screen-lock biometrics.
+// The Android app keeps its native biometric prompt; both end up as a normal JWT session.
+router.get("/auth/webauthn/status",wrap(async(_req,res)=>{
+  res.json({available:true,rpID:RP.rpID});
+}));
+router.post("/auth/webauthn/register/options",auth,sensitiveLimiter,wrap(async(req,res)=>{
+  if(await countCredentials(req.user.id)>=5) return res.status(400).json({error:"You already added 5 devices. Remove one first."});
+  res.set("Cache-Control","no-store");
+  res.json({options:await registrationOptions(req.user)});
+}));
+router.post("/auth/webauthn/register/verify",auth,sensitiveLimiter,wrap(async(req,res)=>{
+  const label=String(req.body?.label||"This device").slice(0,60);
+  try{
+    await registrationVerify({user:req.user,response:req.body?.response,label});
+  }catch(e){ return res.status(400).json({error:e.message||"Could not add this device."}); }
+  await audit(req,"auth.webauthn_added","WebAuthnCredential",req.user.id);
+  res.status(201).json({credentials:await listCredentials(req.user.id)});
+}));
+router.get("/auth/webauthn/credentials",auth,wrap(async(req,res)=>{
+  res.json({credentials:await listCredentials(req.user.id)});
+}));
+router.delete("/auth/webauthn/credentials/:id",auth,wrap(async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({error:"Device not found"});
+  const removed=await WebAuthnCredential.findOneAndDelete({_id:req.params.id,userId:req.user.id});
+  if(!removed) return res.status(404).json({error:"Device not found"});
+  await audit(req,"auth.webauthn_removed","WebAuthnCredential",removed.id);
+  res.json({credentials:await listCredentials(req.user.id)});
+}));
+router.post("/auth/webauthn/login/options",loginLimiter,wrap(async(req,res)=>{
+  res.set("Cache-Control","no-store");
+  const email=String(req.body?.email||"").toLowerCase().trim();
+  const options=await authenticationOptions(email);
+  // Same generic answer whether or not the account exists, so this cannot be used to probe emails.
+  if(!options) return res.status(404).json({error:"No fingerprint or face is saved for this account on the web. Sign in with your password once, then add this device in Settings → Security."});
+  res.json({options});
+}));
+router.post("/auth/webauthn/login/verify",loginLimiter,wrap(async(req,res)=>{
+  let user;
+  try{
+    user=await authenticationVerify({email:req.body?.email,response:req.body?.response});
+  }catch(e){ return res.status(401).json({error:e.message||"Fingerprint/face sign-in failed."}); }
+  if(user.status!=="active"){
+    const msg=user.status==="pending_approval"?"Your account is waiting for admin approval.":user.status==="pending_email"?"Please verify your email first.":"Account is unavailable";
+    return res.status(403).json({error:msg,status:user.status,role:user.role});
+  }
+  const fresh=await User.findById(user._id);
+  fresh.lastLoginAt=new Date(); fresh.lastSeenAt=new Date(); await fresh.save();
+  await audit(req,"auth.webauthn_login","User",fresh.id);
+  res.json({token:makeToken(fresh),user:{id:fresh.id,name:fresh.name,email:fresh.email,role:fresh.role},method:"webauthn"});
 }));
 
 router.get("/auth/me",auth,wrap(async(req,res)=>{

@@ -7,10 +7,11 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "generate-signing-keys": "node ../../scripts/generate-prescription-signing-keys.js",
-    "test": "node --test ../../tests/util.test.js ../../tests/crypto-signing-smoke.test.js ../../tests/report-rules.test.js ../../tests/file-storage.test.js ../../tests/medicine-template.test.js ../../tests/email-otp.test.js ../../tests/ai.test.js ../../tests/fuzzy.test.js ../../tests/ads.test.js ../../tests/pwa.test.js ../../tests/apk-signing.test.js ../../tests/totp.test.js ../../tests/seo.test.js ../../tests/app-features.test.js ../../tests/body-map.test.js",
+    "test": "node --test ../../tests/util.test.js ../../tests/crypto-signing-smoke.test.js ../../tests/report-rules.test.js ../../tests/file-storage.test.js ../../tests/medicine-template.test.js ../../tests/email-otp.test.js ../../tests/ai.test.js ../../tests/fuzzy.test.js ../../tests/ads.test.js ../../tests/pwa.test.js ../../tests/apk-signing.test.js ../../tests/totp.test.js ../../tests/seo.test.js ../../tests/app-features.test.js ../../tests/body-map.test.js ../../tests/passkey-posters.test.js",
     "test:crypto": "node --test ../../tests/crypto-signing-smoke.test.js"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^14.1.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
@@ -20,11 +21,11 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.9.5",
     "multer": "^1.4.5-lts.1",
-    "zod": "^3.24.1",
     "nodemailer": "^6.9.16",
     "pdf-parse": "^1.1.1",
-    "tesseract.js": "^5.1.1",
     "pdfkit": "^0.16.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "tesseract.js": "^5.1.1",
+    "zod": "^3.24.1"
   }
 }

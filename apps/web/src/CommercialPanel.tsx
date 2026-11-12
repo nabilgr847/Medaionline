@@ -6,6 +6,7 @@ import { makeApi, json, fmtDate, fmtSize, API } from "./api";
 import { Tabs } from "./common";
 import { checkBiometrics, isNativeApp, unlockWithBiometric, biometricLockEnabled, setBiometricLockEnabled, biometricLabel, saveBiometricToken } from "./biometric";
 import { pingServer, setApiBase, clearApiBase } from "./api";
+import { addPasskey, listPasskeys, removePasskey, passkeysSupported, rememberPasskeyEmail } from "./webauthn";
 import { syncReminders, remindersEnabled, setRemindersEnabled, requestNotifyPermission, notifySupported, stopInPageChecker } from "./notify";
 
 type Role = "patient" | "doctor" | "admin";
@@ -58,6 +59,10 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  // Browser fingerprint / face (WebAuthn) — the phone-app path is the native prompt above.
+  const [pkSupported, setPkSupported] = useState(false);
+  const [pkList, setPkList] = useState<Array<{ id: string; label: string; createdAt: string; lastUsedAt?: string }>>([]);
+  const [pkBusy, setPkBusy] = useState(false);
   const [form, setForm] = useState<any>({});
   const [reminders, setReminders] = useState<MedicineReminder[]>([]);
   const [intakeLogs, setIntakeLogs] = useState<IntakeLog[]>([]);
@@ -187,6 +192,12 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
     } catch (e: any) { setErr(e.message || "Could not disable"); }
     finally { setLoading(false); }
   };
+
+  useEffect(() => { passkeysSupported().then(setPkSupported).catch(() => {}); }, []);
+  useEffect(() => {
+    if (tab !== "security") return;
+    listPasskeys(api).then(setPkList).catch(() => {});
+  }, [tab]);
 
   // ---------- Data export ----------
   const requestExport = async () => {
@@ -675,6 +686,48 @@ export default function CommercialPanel({ api, token, user, onToken, setMessage 
                 >
                   Test fingerprint
                 </button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#fff", marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#0f172a" }}>Fingerprint / face on this browser or PC</div>
+            <div style={{ fontSize: 13, color: "#64748b", marginTop: 2, marginBottom: 12 }}>
+              {pkSupported
+                ? "Windows Hello, Touch ID or the phone's own fingerprint/face can sign you in on the website too. Only a public key is saved on the server — your fingerprint never leaves the device."
+                : "This browser does not offer a built-in fingerprint/face check. Chrome, Edge, Safari and Firefox on a phone or PC with Windows Hello do."}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="primary"
+                disabled={!pkSupported || pkBusy}
+                onClick={async () => {
+                  setPkBusy(true); setErr(""); setMsg("");
+                  try {
+                    const label = (navigator.userAgent.includes("Windows") ? "Windows Hello" : navigator.userAgent.includes("iPhone") || navigator.userAgent.includes("iPad") ? "This iPhone / iPad" : navigator.userAgent.includes("Android") ? "This Android phone" : "This browser");
+                    setPkList(await addPasskey(api, label));
+                    rememberPasskeyEmail(user.email);
+                    setMsg("Added. You can now sign in with your fingerprint or face on this device.");
+                  } catch (e: any) { setErr(e.message || "Could not add this device."); }
+                  finally { setPkBusy(false); }
+                }}
+              >{pkBusy ? "Waiting for the device…" : "Add this device"}</button>
+              <button className="outline" disabled={pkBusy} onClick={async () => { try { setPkList(await listPasskeys(api)); } catch (e: any) { setErr(e.message); } }}>Refresh list</button>
+            </div>
+            {pkList.length > 0 && (
+              <div style={{ marginTop: 14, borderTop: "1px solid #f1f5f9", paddingTop: 10 }}>
+                {pkList.map((row) => (
+                  <div key={row.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "6px 0", fontSize: 13 }}>
+                    <span style={{ color: "#0f172a", fontWeight: 600 }}>{row.label || "This device"}</span>
+                    <span style={{ color: "#64748b", flex: 1, textAlign: "right" }}>{row.lastUsedAt ? "last used " + fmtDate(row.lastUsedAt) : "added " + fmtDate(row.createdAt)}</span>
+                    <button className="outline" disabled={pkBusy} onClick={async () => {
+                      setPkBusy(true); setErr(""); setMsg("");
+                      try { setPkList(await removePasskey(api, row.id)); setMsg("That device can no longer sign in."); }
+                      catch (e: any) { setErr(e.message); }
+                      finally { setPkBusy(false); }
+                    }}>Remove</button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
