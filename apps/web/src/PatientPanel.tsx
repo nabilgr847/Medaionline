@@ -29,7 +29,7 @@ export default function PatientPanel({ api, token, user, onToken, setMessage }: 
     {tab === "rx" && <MyPrescriptions api={api} token={token} user={user} setMessage={setMessage} />}
     {tab === "medicines" && <MedicineSearch api={api} setMessage={setMessage} />}
     {tab === "profile" && <Profile api={api} setMessage={setMessage} />}
-    {tab === "anatomy" && <div className="grid"><AnatomyCard /></div>}
+    {tab === "anatomy" && <div className="grid"><AnatomyCard onOpenBodyMap={() => setTab("bodymap")} /></div>}
     {tab === "bodymap" && <BodyMapCard api={api} token={token} setMessage={setMessage} />}
     {tab === "ai" && <ChatAI api={api} token={token} setMessage={setMessage} />}
     {tab === "account" && <div className="grid"><ChangePassword api={api} onToken={onToken} setMessage={setMessage} /></div>}

@@ -9,7 +9,8 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
-const MODEL = join(root, "apps/web/public/anatomy/body.glb");
+const ANATOMY = join(root, "apps/web/public/anatomy");
+const MODEL = join(ANATOMY, "body.glb");
 
 const routes = read("apps/api/src/routes.js");
 const models = read("apps/api/src/models.js");
@@ -20,8 +21,8 @@ const manifest = JSON.parse(read("apps/web/public/anatomy/body.parts.json"));
 const parts = manifest.parts;
 assert.ok(Array.isArray(parts) && parts.length > 100, "body.parts.json must list the anatomy parts");
 
-function readGlb() {
-  const buffer = readFileSync(MODEL);
+function readGlb(file = MODEL) {
+  const buffer = readFileSync(file);
   assert.equal(buffer.readUInt32LE(0), 0x46546c67, "not a GLB file");
   assert.equal(buffer.readUInt32LE(4), 2, "GLB version must be 2");
   assert.equal(buffer.readUInt32LE(8), buffer.length, "GLB length header is wrong");
@@ -35,23 +36,48 @@ function readGlb() {
 }
 
 const { json: glb, bin, bytes } = readGlb();
+const muscles = readGlb(join(ANATOMY, "muscles.glb"));
+const vessels = readGlb(join(ANATOMY, "vessels.glb"));
+const layerFiles = manifest.files || [];
 
-test("the shipped body model stays small enough to download on a phone", () => {
-  // Before this guard the naive pack was 13 MB; the trimmed/simplified one must stay here.
+test("the first download stays small enough for a phone", () => {
+  // Before this guard the naive pack was 13 MB and the muscle layer alone was 7.6 MB.
   assert.ok(bytes <= 6 * 1024 * 1024, `body.glb is ${(bytes / 1048576).toFixed(1)} MB — trim it again`);
-  assert.ok(statSync(join(root, "apps/web/public/anatomy/body.parts.json")).size < 200 * 1024);
+  assert.ok(muscles.bytes <= 3 * 1024 * 1024, `muscles.glb is ${(muscles.bytes / 1048576).toFixed(1)} MB`);
+  assert.ok(vessels.bytes <= 3 * 1024 * 1024, `vessels.glb is ${(vessels.bytes / 1048576).toFixed(1)} MB`);
+  const total = bytes + muscles.bytes + vessels.bytes;
+  assert.ok(total <= 10 * 1024 * 1024, `all layers together are ${(total / 1048576).toFixed(1)} MB`);
+  assert.ok(statSync(join(ANATOMY, "body.parts.json")).size < 400 * 1024);
 });
 
-test("the model keeps bones, organs and the brain but drops muscles/vessels", () => {
-  const systems = new Set(parts.map((p) => p.system));
+test("layer 1 keeps bones, organs and the brain; muscles and vessels ship separately", () => {
+  const bodyParts = parts.filter((p) => (p.layer || "body") === "body");
+  const systems = new Set(bodyParts.map((p) => p.system));
   for (const keep of ["skeletal", "cardiac", "respiratory", "digestive", "urinary", "nervous"]) {
     assert.ok(systems.has(keep), `missing system: ${keep}`);
   }
   for (const drop of ["muscular", "arterial", "venous", "lymphatic", "integumentary", "connective"]) {
-    assert.ok(!systems.has(drop), `${drop} should have been trimmed away`);
+    assert.ok(!systems.has(drop), `${drop} must not be in the always-downloaded file`);
   }
-  const brain = parts.filter((p) => /brain|spinal cord/i.test(p.name));
+  const brain = bodyParts.filter((p) => /brain|spinal cord/i.test(p.name));
   assert.ok(brain.length > 0, "the nervous system must be reduced to brain / spinal cord");
+
+  // The optional layers are real, named and tagged so the UI can filter them.
+  for (const [layer, system] of [["muscles", "muscular"], ["vessels", "arterial"], ["vessels", "venous"]]) {
+    const list = parts.filter((p) => p.layer === layer && p.system === system);
+    assert.ok(list.length > 0, `${layer} layer has no ${system} parts`);
+    assert.ok(list.every((p) => typeof p.name === "string" && p.name.length > 2));
+  }
+  assert.deepEqual(layerFiles.map((f) => f.file).sort(), ["body.glb", "muscles.glb", "vessels.glb"]);
+});
+
+test("each layer file only carries its own systems", () => {
+  const systemsOf = (fileJson) => fileJson.materials.map((m) => m.name).sort();
+  assert.ok(systemsOf(glb).includes("skeletal"));
+  assert.ok(!systemsOf(glb).includes("muscular"), "muscles must not be in the first download");
+  assert.deepEqual(systemsOf(muscles.json), ["muscular"]);
+  assert.deepEqual(systemsOf(vessels.json), ["arterial", "venous"]);
+  assert.ok(muscles.json.meshes.length >= 1 && vessels.json.meshes.length >= 1);
 });
 
 test("every part id in the binary buffer points at a real anatomical name", () => {
@@ -133,6 +159,23 @@ test("patient and doctor views are scoped, not a global list", () => {
   assert.match(routes, /router\.get\("\/doctor\/pain-reports",auth,allow\("doctor"\)/);
   const admin = routes.slice(routes.indexOf('router.get("/admin/pain-reports"'));
   assert.match(admin.slice(0, 400), /allow\("admin"\)/);
+});
+
+test("the optional layers are lazy: nothing extra is fetched until the toggle is used", () => {
+  assert.match(viewer, /anatomy\/muscles\.glb/);
+  assert.match(viewer, /anatomy\/vessels\.glb/);
+  assert.match(viewer, /loadLayer/);
+  assert.match(viewer, /setExtraVisible/);
+  assert.match(viewer, /transparent = true/, "muscles must be see-through or they hide the organs");
+  // The first view must not import the layer files eagerly.
+  const openBlock = viewer.slice(viewer.indexOf("async function buildBody"), viewer.indexOf("async function buildBody") + 4000);
+  assert.equal((openBlock.match(/anatomy\/muscles\.glb/g) || []).length, 0,
+    "the muscle file must be loaded from the toggle handler, not when the body opens");
+});
+
+test("the 3D anatomy tab points people at the real model", () => {
+  assert.match(read("apps/web/src/anatomy.tsx"), /onOpenBodyMap/);
+  assert.match(read("apps/web/src/PatientPanel.tsx"), /onOpenBodyMap=\{/);
 });
 
 test("the viewer picks the tapped spot from _PARTID, not from a pixel colour", () => {

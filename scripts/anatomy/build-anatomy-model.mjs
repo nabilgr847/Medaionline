@@ -1,5 +1,5 @@
 // © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
-// Builds the compact full-body model used by the "3D anatomy" tab.
+// Builds the compact full-body models used by the 3D body / pain map screen.
 //
 // Source: BodyParts3D 4.0 (Database Center for Life Science, Japan) — CC BY 4.0, prepared for
 // the web by Human Atlas / Dagno (github.com/dagno-labs/anatomy-model, also CC BY 4.0).
@@ -8,14 +8,14 @@
 //
 // What this script does:
 //   1. downloads the prepared pack (atlas.json + gzipped chunks) once, into a cache folder
-//   2. keeps the systems a patient can point at (skeleton + organs), drops muscles,
-//      blood vessels and the skin, which only slowed the phone down
-//   3. simplifies every heavy mesh with meshoptimizer
-//   4. writes ONE glb (about 150k triangles) + a small JSON that maps a picked triangle to
-//      an anatomical name
+//   2. keeps the systems a patient can point at: skeleton + organs (always), plus muscles
+//      and blood vessels as OPTIONAL layers that only download when they are switched on
+//   3. simplifies every heavy mesh with meshoptimizer (harder for muscles/vessels)
+//   4. writes one glb per layer + one small JSON that maps a picked vertex back to an
+//      anatomical name (part ids are global across all layers)
 //
 // Run:  node scripts/anatomy/build-anatomy-model.mjs
-// Out:  apps/web/public/anatomy/body.glb, body.parts.json, ATTRIBUTION.md
+// Out:  apps/web/public/anatomy/{body,muscles,vessels}.glb, body.parts.json, ATTRIBUTION.md
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { createReadStream } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -35,8 +35,29 @@ const requireFromWeb = createRequire(join(repo, "apps/web/package.json"));
 const meshoptimizerPath = requireFromWeb.resolve("meshoptimizer");
 const { MeshoptSimplifier } = await import(pathToFileURL(meshoptimizerPath).href);
 
-const KEEP = new Set(["skeletal", "cardiac", "respiratory", "digestive", "urinary", "endocrine", "reproductive", "sensory"]);
+// One is small enough to open immediately; the other two are optional and lazy-loaded,
+// because muscles and vessels alone are 1.3 million source triangles.
+const LAYERS = [
+  { file: "body.glb", layer: "body", title: "bones + organs", systems: ["skeletal", "cardiac", "respiratory", "digestive", "urinary", "endocrine", "reproductive", "sensory", "nervous"] },
+  { file: "muscles.glb", layer: "muscles", title: "muscles", systems: ["muscular"] },
+  { file: "vessels.glb", layer: "vessels", title: "blood vessels", systems: ["arterial", "venous"] },
+];
 const KEEP_NERVOUS = /brain|spinal cord/i;
+/** Muscles and vessels are mostly smooth tubes: they survive far harder simplification. */
+const RATIO_BY_SYSTEM = {
+  // Muscle sheets are smooth and overlap: a flat budget keeps the layer under ~1 MB.
+  muscular: (triangles) => (triangles < 120 ? 1 : 0.12),
+  arterial: (triangles) => (triangles < 120 ? 1 : 0.11),
+  venous: (triangles) => (triangles < 120 ? 1 : 0.11),
+};
+const ratioFor = (system, triangles) => RATIO_BY_SYSTEM[system]?.(triangles)
+  ?? (triangles > 2000 ? 0.12 : triangles > 500 ? 0.2 : triangles > 150 ? 0.38 : 1);
+/**
+ * BodyParts3D muscle/vessel sheets are non-manifold, so the strict simplifier stops at ~50 %
+ * and leaves the layer at 8 MB. "Permissive" collapses across those seams and reaches the
+ * budget; it is only used for the two optional overlay layers, never for bones or organs.
+ */
+const flagsFor = (system) => (["muscular", "arterial", "venous"].includes(system) ? ["Permissive"] : ["LockBorder"]);
 
 const COLORS = {
   skeletal: [0xef, 0xe9, 0xdc],
@@ -48,6 +69,9 @@ const COLORS = {
   reproductive: [0xb0, 0x7a, 0xa1],
   sensory: [0x2f, 0x6d, 0xb5],
   nervous: [0xf0, 0xa9, 0xb8],
+  muscular: [0xc9, 0x77, 0x6f],
+  arterial: [0xd9, 0x3a, 0x33],
+  venous: [0x3f, 0x63, 0xb8],
 };
 
 function fetchSource() {
@@ -64,12 +88,12 @@ function fetchSource() {
 }
 
 /** Runs on a list of triangle indices; keeps vertex order so normals stay valid. */
-function simplify(positions, indices, targetRatio) {
+function simplify(positions, indices, targetRatio, flags = ["LockBorder"]) {
   if (targetRatio >= 0.999) return { indices, ratio: 1 };
   // meshopt requires the target index count to be a multiple of 3 (whole triangles).
   const targetTriangles = Math.max(8, Math.floor(((indices.length / 3) * targetRatio) / 3) * 3);
   const target = Math.min(indices.length, targetTriangles * 3);
-  const [simplified] = MeshoptSimplifier.simplify(indices, positions, 3, target, 0.05, ["LockBorder"]);
+  const [simplified] = MeshoptSimplifier.simplify(indices, positions, 3, target, 0.05, flags);
   return { indices: simplified, ratio: simplified.length / indices.length };
 }
 
@@ -90,12 +114,12 @@ function compact(positions, indices) {
   return { positions: new Float32Array(outPositions), indices: outIndices, vertexCount: count };
 }
 
-function buildGlb(systems) {
+function buildGlb(systems, layer, startId) {
   // Phones dislike many draw calls and 32-bit indices, so each system is split into
   // vertex runs of at most 65 000 vertices: one material per system, uint16 indices.
   const meshes = [];
   const parts = [];
-  let partId = 0;
+  let partId = startId;
 
   for (const [system, partsOfSystem] of systems) {
     let current = null;
@@ -111,7 +135,7 @@ function buildGlb(systems) {
     current = startMesh();
 
     for (const part of partsOfSystem) {
-      parts.push({ id: partId, name: part.name, system, conceptId: part.conceptId });
+      parts.push({ id: partId, name: part.name, system, layer, conceptId: part.conceptId });
       if (current.vertexCount + part.vertexCount > 65000) flush();
       if (!current) current = startMesh();
       const base = current.vertexCount;
@@ -126,6 +150,7 @@ function buildGlb(systems) {
   }
 
   return {
+    nextId: partId,
     meshes: meshes.map((mesh) => ({
       system: mesh.system,
       positions: new Float32Array(mesh.positions),
@@ -238,12 +263,14 @@ async function main() {
   const atlas = JSON.parse(readFileSync(join(modelDir, "atlas.json"), "utf8"));
 
   const chunks = atlas.chunks.map((chunk) => gunzipSync(readFileSync(join(modelDir, chunk.gzip))));
+  const wantedSystems = new Set(LAYERS.flatMap((entry) => entry.systems));
   const wanted = atlas.parts.filter((part) => {
-    const keep = KEEP.has(part.system) || (part.system === "nervous" && KEEP_NERVOUS.test(part.name));
+    const keep = wantedSystems.has(part.system) && (part.system !== "nervous" || KEEP_NERVOUS.test(part.name));
     // Tiny decorations (a single tooth, a small cartilage) cost more draw time than they teach.
     return keep && part.indexCount / 3 >= 140;
   });
 
+  // Geometry is prepared once per part, then grouped per output file.
   const bySystem = new Map();
   let sourceTriangles = 0;
   for (const part of wanted) {
@@ -252,8 +279,7 @@ async function main() {
     const indices = new Uint32Array(buffer.buffer, buffer.byteOffset + part.indices, part.indexCount);
     const triangles = part.indexCount / 3;
     sourceTriangles += triangles;
-    const ratio = triangles > 2000 ? 0.12 : triangles > 500 ? 0.2 : triangles > 150 ? 0.38 : 1;
-    const simplified = simplify(new Float32Array(positions), new Uint32Array(indices), ratio);
+    const simplified = simplify(new Float32Array(positions), new Uint32Array(indices), ratioFor(part.system, triangles), flagsFor(part.system));
     const geometry = compact(new Float32Array(positions), simplified.indices);
     const list = bySystem.get(part.system) || [];
     list.push({
@@ -266,23 +292,42 @@ async function main() {
     bySystem.set(part.system, list);
   }
 
-  const { meshes, parts } = buildGlb([...bySystem.entries()]);
   mkdirSync(outDir, { recursive: true });
-  writeGlb(meshes, join(outDir, "body.glb"));
+  const files = [];
+  const allParts = [];
+  let nextId = 0;
+  let totalTriangles = 0;
 
-  const triangles = meshes.reduce((sum, m) => sum + m.indexCount / 3, 0);
+  for (const entry of LAYERS) {
+    const systems = entry.systems.filter((system) => bySystem.has(system)).map((system) => [system, bySystem.get(system)]);
+    if (!systems.length) continue;
+    const built = buildGlb(systems, entry.layer, nextId);
+    nextId = built.nextId;
+    const path = join(outDir, entry.file);
+    writeGlb(built.meshes, path);
+    const triangles = built.meshes.reduce((sum, mesh) => sum + mesh.indexCount / 3, 0);
+    const bytes = readFileSync(path).length;
+    totalTriangles += triangles;
+    allParts.push(...built.parts);
+    files.push({ file: entry.file, layer: entry.layer, title: entry.title, parts: built.parts.length, triangles, bytes });
+    console.log(`${entry.file}: ${(bytes / 1048576).toFixed(2)} MB, ${triangles} triangles, ${built.parts.length} parts`);
+  }
+
   writeFileSync(join(outDir, "body.parts.json"), JSON.stringify({
     source: "BodyParts3D 4.0 (CC BY 4.0), prepared by Human Atlas / Dagno",
     license: "CC BY 4.0 — see ATTRIBUTION.md",
     units: "metres, Y up, feet at y=0",
     sourceTriangles,
-    triangles,
-    parts,
+    triangles: totalTriangles,
+    files,
+    parts: allParts,
   }));
+  console.log(`total: ${(files.reduce((sum, f) => sum + f.bytes, 0) / 1048576).toFixed(2)} MB, ${totalTriangles} triangles from ${sourceTriangles}, ${allParts.length} parts`);
 
   writeFileSync(join(outDir, "ATTRIBUTION.md"), `# 3D anatomy model — attribution
 
-The model in this folder (\`body.glb\`) is derived from **BodyParts3D 4.0**:
+The models in this folder (\`body.glb\`, \`muscles.glb\`, \`vessels.glb\`) are derived from
+**BodyParts3D 4.0**:
 
 > BodyParts3D, © The Database Center for Life Science, licensed under
 > [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
@@ -294,19 +339,19 @@ The model in this folder (\`body.glb\`) is derived from **BodyParts3D 4.0**:
   concepts*, <https://doi.org/10.1093/nar/gkn613>
 
 ## Changes made for MedAI Hospital
-- Kept the skeleton and the organs a patient can point at; removed muscles, blood vessels,
-  the body surface and most nerves (they made the download too large for a phone).
-- Simplified heavy meshes with meshoptimizer.
-- Packed everything into one glTF binary with vertex colours and a per-vertex part id, and
-  added \`body.parts.json\` which maps a picked triangle back to an anatomical name.
+- Split the body into three layers: bones + organs (always), muscles and blood vessels
+  (optional, downloaded only when the patient switches them on). Skin, connective tissue
+  and most nerves were removed; the nervous system keeps the brain and spinal cord.
+- Simplified every heavy mesh with meshoptimizer and dropped the tiny parts that no one can
+  point at on a phone screen.
+- Colours are per-system materials, not per-vertex colours (smaller file, sharper look).
+- Packed each layer into one glTF binary with uint16 indices and a per-vertex part id;
+  \`body.parts.json\` maps a picked vertex back to an anatomical name.
+- Normals are not stored in the file (about 1 MB) and are computed on the device once.
 
 CC BY 4.0 requires attribution, not permission: MedAI keeps this notice in the app
-(*3D anatomy → About this model*) and ships this file with the model.
+(*3D body → "Where this body model comes from"*) and ships this file with the models.
 `);
-
-  const size = readFileSync(join(outDir, "body.glb")).length;
-  console.log(`body.glb: ${(size / 1048576).toFixed(2)} MB, ${Math.round(triangles)} triangles from ${Math.round(sourceTriangles)}`);
-  console.log(`parts: ${parts.length}, systems: ${[...bySystem.keys()].join(", ")}`);
 }
 
 main().catch((error) => { console.error(error); process.exit(1); });
