@@ -105,16 +105,81 @@ manifest_text = manifest.read_text()
 if 'android:extractNativeLibs' not in manifest_text:
     # Capacitor puts android: allowsBackup on <application>; append our attribute there.
     manifest_text = manifest_text.replace("<application", '<application android:extractNativeLibs="true"', 1)
-    manifest.write_text(manifest_text)
     print("Manifest: extractNativeLibs=true (older installers need it).")
 
-# ---- native bridge: downloads + print ----
-tpl = (mobile / "native/MainActivity.java.tpl").read_text()
-targets = list((main / "java").rglob("MainActivity.java"))
+# ---- crash guard: an Application that survives/reports a failed start ----
+# Symptom this fixes: the APK installs but closes the moment it is tapped, with no reason
+# anywhere. android:name makes MedAIApplication run before any activity, so every uncaught
+# exception is saved and shown instead of the app disappearing silently.
+for attribute in (
+    'android:name=".MedAIApplication"',
+    'android:largeHeap="true"',
+    'android:hardwareAccelerated="true"',
+):
+    if attribute not in manifest_text:
+        manifest_text = manifest_text.replace("<application", "<application " + attribute, 1)
+        print("Manifest:", attribute, "added.")
+
+if 'CrashReportActivity' not in manifest_text:
+    crash_activity = (
+        '        <activity\n'
+        '            android:name=".CrashReportActivity"\n'
+        '            android:process=":crash"\n'
+        '            android:exported="false"\n'
+        '            android:label="MedAI report"\n'
+        '            android:theme="@android:style/Theme.DeviceDefault.Light" />\n'
+        '    </application>'
+    )
+    if "    </application>" not in manifest_text:
+        raise SystemExit("Could not find </application> in the manifest - crash report screen not added")
+    manifest_text = manifest_text.replace("    </application>", crash_activity, 1)
+    print("Manifest: crash report screen added in its own process.")
+manifest.write_text(manifest_text)
+
+# ---- SDK levels, fixed instead of "whatever the template shipped with" ----
+# Capacitor 6 still allows API 22; a 2026 build only has to support phones that can run a
+# current Android System WebView, and pinning the levels makes builds reproducible.
+variables = android / "variables.gradle"
+if variables.exists():
+    vtext = variables.read_text()
+    for key, value in (("minSdkVersion", 24), ("compileSdkVersion", 34), ("targetSdkVersion", 34)):
+        vtext = re.sub(rf"{key}\s*=\s*\d+", f"{key} = {value}", vtext)
+    variables.write_text(vtext)
+    print("variables.gradle: minSdk 24, compileSdk 34, targetSdk 34.")
+
+# ---- native sources: crash guard, report screen, download/print bridge ----
+# The package is taken from capacitor.config.json instead of "first MainActivity found":
+# `cap add android` ships a placeholder at com/getcapacitor/myapp, and writing our code there
+# would leave the real activity untouched.
+import json
+
+config = json.loads((mobile / "capacitor.config.json").read_text())
+app_id = config.get("appId", "com.medai.hospital")
+expected = main / "java" / Path(*app_id.split(".")) / "MainActivity.java"
+targets = [expected] if expected.exists() else list((main / "java").rglob("MainActivity.java"))
+targets = [t for t in targets if "getcapacitor" not in t.as_posix()] or targets
 if not targets:
     raise SystemExit("MainActivity.java not found - cannot add native download support")
 target = targets[0]
 pkg = re.search(r"^\s*package\s+([\w.]+)\s*;", target.read_text(), re.M).group(1)
-target.write_text(tpl.replace("__PACKAGE__", pkg))
-print("Native download/print bridge added to", target.name)
+if pkg != app_id:
+    raise SystemExit(f"MainActivity package {pkg} does not match the appId {app_id} in capacitor.config.json")
+print("Native code goes into", target.parent)
+
+templates = {
+    "MainActivity.java.tpl": "MainActivity.java",
+    "MedAIApplication.java.tpl": "MedAIApplication.java",
+    "CrashReportActivity.java.tpl": "CrashReportActivity.java",
+}
+missing = [name for name in templates if not (mobile / "native" / name).exists()]
+if missing:
+    raise SystemExit("Missing native template(s): " + ", ".join(missing))
+
+for tpl_name, out_name in templates.items():
+    source = (mobile / "native" / tpl_name).read_text().replace("__PACKAGE__", pkg)
+    if "__PACKAGE__" in source:
+        raise SystemExit(f"{tpl_name} still contains __PACKAGE__ - package was not substituted")
+    (target.parent / out_name).write_text(source)
+    print("Wrote", out_name)
+
 print("Android project patched.")

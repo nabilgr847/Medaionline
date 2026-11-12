@@ -3,6 +3,7 @@ package __PACKAGE__;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -12,9 +13,14 @@ import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.util.TypedValue;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.getcapacitor.BridgeActivity;
@@ -25,17 +31,150 @@ import java.io.OutputStream;
 
 /**
  * MedAI Hospital Android shell.
- * Gives the web app two native abilities that a plain WebView does not have:
- *  - window.MedAIAndroid.saveBase64(name, mime, base64): save a downloaded file (prescription PDF, report, photo...) to Downloads and open it
- *  - window.MedAIAndroid.printHtml(html, title): open the Android print dialog (Save as PDF / print)
+ *
+ * <p>Native abilities given to the web app (both are impossible in a plain browser):
+ * <ul>
+ *   <li>{@code window.MedAIAndroid.saveBase64(name, mime, base64)} — save a downloaded file
+ *       (prescription PDF, report, photo…) to Downloads and open it.</li>
+ *   <li>{@code window.MedAIAndroid.printHtml(html, title)} — open the Android print dialog
+ *       (Save as PDF / print).</li>
+ * </ul>
+ *
+ * <p>Every start-up step is wrapped: a phone with a broken or disabled Android System WebView,
+ * or one Capacitor plugin that fails while loading, used to take the whole app down at launch
+ * ("app installs but closes immediately"). Now the failure is recorded and shown, and the app
+ * stays open whenever the bridge itself survived.
  */
 public class MainActivity extends BridgeActivity {
     private WebView printWebView;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        getBridge().getWebView().addJavascriptInterface(new NativeBridge(), "MedAIAndroid");
+        try {
+            super.onCreate(savedInstanceState);
+        } catch (Throwable error) {
+            startupFailed(error);
+            return;
+        }
+        attachNativeBridge();
+    }
+
+    /**
+     * Capacitor builds the WebView bridge and loads every native plugin in here. A single
+     * failing plugin (or a missing WebView package) throws from this call and killed the app,
+     * so it is caught and reported instead of closing.
+     */
+    @Override
+    protected void load() {
+        try {
+            super.load();
+        } catch (Throwable error) {
+            startupFailed(error);
+        }
+    }
+
+    // After a failed start the bridge can be missing, and Capacitor's own lifecycle code
+    // dereferences it without a null check in these four places. Guarding them keeps the
+    // error screen visible instead of crashing a second time.
+    @Override
+    public void onRestart() {
+        try {
+            super.onRestart();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        try {
+            super.onNewIntent(intent);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        try {
+            super.onSaveInstanceState(outState);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        try {
+            super.onDestroy();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void attachNativeBridge() {
+        try {
+            WebView webView = getBridge() == null ? null : getBridge().getWebView();
+            if (webView != null) {
+                webView.addJavascriptInterface(new NativeBridge(), "MedAIAndroid");
+            }
+        } catch (Throwable error) {
+            MedAIApplication.recordCrash(this, error);
+        }
+    }
+
+    /** Saves the reason, shows it on screen, and opens the copyable report. */
+    private void startupFailed(Throwable error) {
+        String text = MedAIApplication.recordCrash(this, error);
+        try {
+            showStartupError(text);
+        } catch (Throwable ignored) {
+            // nothing else can be done if even a TextView cannot be shown
+        }
+        try {
+            Intent intent = new Intent(this, CrashReportActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            intent.putExtra(CrashReportActivity.EXTRA_TEXT, text);
+            startActivity(intent);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void showStartupError(String text) {
+        int pad = Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP, 18, getResources().getDisplayMetrics()));
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.WHITE);
+        root.setPadding(pad, pad, pad, pad);
+
+        TextView title = new TextView(this);
+        title.setText("MedAI Hospital could not start");
+        title.setTextSize(20);
+        title.setTextColor(Color.parseColor("#092b46"));
+
+        TextView hint = new TextView(this);
+        hint.setText("Update \"Android System WebView\" from the Play Store, then reopen the app.\n\n"
+                + "If it still happens, copy the text below and send it to support.");
+        hint.setTextSize(14);
+        hint.setTextColor(Color.parseColor("#33475b"));
+        hint.setPadding(0, pad / 2, 0, pad / 2);
+
+        ScrollView scroll = new ScrollView(this);
+        TextView details = new TextView(this);
+        details.setText(text);
+        details.setTextSize(12);
+        details.setTextIsSelectable(true);
+        details.setBackgroundColor(Color.parseColor("#fff6e0"));
+        details.setPadding(pad, pad, pad, pad);
+        scroll.addView(details, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        root.addView(title, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(hint, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        setContentView(root);
     }
 
     private void toast(final String msg) {
