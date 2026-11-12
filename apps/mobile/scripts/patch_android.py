@@ -60,10 +60,16 @@ keystore = mobile / "medai-release.jks"
 if not keystore.exists():
     raise SystemExit(f"Signing key missing: {keystore}. The APK would be signed with a random debug key "
                      "and could never update an existing install.")
+# The password comes from the environment (GitHub secret MEDAI_STORE_PASSWORD) when it is
+# set, so it can be rotated without editing this file. The fallback keeps old builds working
+# until that secret exists.
+store_pass = os.environ.get("MEDAI_STORE_PASSWORD", "medaiapp2026")
+if store_pass == "medaiapp2026":
+    print("NOTE: using the built-in signing password; set the MEDAI_STORE_PASSWORD secret to override it.")
 signing = (
     "    signingConfigs {\n        medai {\n"
     '            storeFile file("../../medai-release.jks")\n'
-    '            storePassword "medaiapp2026"\n            keyAlias "medai"\n            keyPassword "medaiapp2026"\n'
+    f'            storePassword "{store_pass}"\n            keyAlias "medai"\n            keyPassword "{store_pass}"\n'
     # v1 (JAR) is what Android 6 uses to verify an APK; v2/v3 are used by newer versions.
     # Leaving any of them to chance is how a phone ends up saying "invalid package".
     "            enableV1Signing true\n            enableV2Signing true\n            enableV3Signing true\n"

@@ -19,7 +19,13 @@ const CANDIDATE_HOSTS = [
 ];
 
 const API_STORAGE_KEY = "medai_api_base";
-const API_PROBE_TIMEOUT = 6000;
+// A sleeping Render container needs 30-60 s to boot. Probing for 6 s marked a perfectly
+// good server as "down" and every screen then showed a network error.
+const API_PROBE_TIMEOUT = 20000;
+/** One attempt may hang; without this a dead connection kept a spinner forever. */
+const REQUEST_TIMEOUT = 45000;
+/** Waits before each attempt. 0 = try immediately, then back off past a cold start. */
+const RETRY_DELAYS = [0, 2500, 7000, 15000];
 
 /**
  * ok        — a real MedAI API answered (possibly reporting a configuration problem)
@@ -142,15 +148,17 @@ async function resolveApi(): Promise<{ base: string; status: ApiStatus }> {
     // 2) The build's own address, then the known API hosts — the website host is skipped.
     const unique = Array.from(new Set([CONFIGURED, ...CANDIDATE_HOSTS].filter(Boolean).map(normalise)))
       .filter((b) => !isFrontendHost(b));
+    // Probe in parallel: sequentially a cold start could block the screen for a minute.
+    const probed = await Promise.all(unique.map(async (base) => ({ base, status: await probe(base) })));
+    const okHost = probed.find((p) => p.status === "ok");
+    if (okHost) {
+      resolved = { base: okHost.base, status: "ok" };
+      try { localStorage.setItem(API_STORAGE_KEY, okHost.base); } catch { /* ignore */ }
+      return resolved;
+    }
     let best: { base: string; status: ApiStatus } | null = null;
-    for (const base of unique) {
-      const status = await probe(base);
-      if (status === "ok") {
-        resolved = { base, status };
-        try { localStorage.setItem(API_STORAGE_KEY, base); } catch { /* ignore */ }
-        return resolved;
-      }
-      if (!best || STATUS_RANK[status] > STATUS_RANK[best.status]) best = { base, status };
+    for (const p of probed) {
+      if (!best || STATUS_RANK[p.status] > STATUS_RANK[best.status]) best = p;
     }
 
     // 3) Nothing worked. A real CORS block on an explicitly chosen address is the most
@@ -169,6 +177,27 @@ function overriddenOrConfigured(): string {
   const quick = overrideFromUrl() || savedBase();
   return quick || CONFIGURED;
 }
+
+/**
+ * Coarse connection state for the UI banner.
+ *   ok      — the last request succeeded
+ *   waking  — retrying; a sleeping server usually answers within a minute
+ *   down     — every attempt failed
+ */
+export type NetState = "ok" | "waking" | "down";
+let netState: NetState = "ok";
+const netListeners = new Set<(s: NetState) => void>();
+export function onNetwork(cb: (s: NetState) => void): () => void {
+  netListeners.add(cb);
+  cb(netState);
+  return () => { netListeners.delete(cb); };
+}
+function setNetwork(s: NetState) {
+  if (s === netState) return;
+  netState = s;
+  netListeners.forEach((f) => { try { f(s); } catch { /* ignore */ } });
+}
+export function networkState(): NetState { return netState; }
 
 /** Status of the connection as last seen by a request or by pingServer(). */
 export let API_STATUS: ApiStatus = CONFIGURED ? "ok" : "unconfigured";
@@ -252,24 +281,42 @@ export function makeApi(token: string): Api {
       headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers || {}) },
     };
     const method = String((opts as any).method || "GET").toUpperCase();
+    const idempotent = method === "GET" || method === "HEAD";
     let r: Response | null = null;
     let lastError: any = null;
-    // A sleeping Render instance can fail the first call; GETs are safe to retry once.
-    for (let attempt = 0; attempt < (method === "GET" ? 2 : 1); attempt++) {
+    // Render sleeps when nobody uses the app. The first request after a quiet period fails
+    // while the container boots, which used to surface as "check your connection" — for
+    // every POST, including sign-in, with no retry at all.
+    //  * network failure  -> the API never received it, so retrying is safe for any method
+    //  * 502/503/504      -> the proxy answered without processing it, safe for idempotent calls
+    for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
+      if (attempt) await new Promise((res) => setTimeout(res, RETRY_DELAYS[attempt]));
+      const control = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = control ? setTimeout(() => control.abort(), REQUEST_TIMEOUT) : null;
       try {
-        r = await fetch(base + "/api" + path, init);
+        r = await fetch(base + "/api" + path, control ? { ...init, signal: control.signal } : init);
+        lastError = null;
+        if (idempotent && (r.status === 502 || r.status === 503 || r.status === 504)) {
+          setNetwork("waking");
+          continue;                       // transient gateway error: try again
+        }
         break;
       } catch (e) {
         lastError = e;
-        if (attempt === 0 && method === "GET") await new Promise((res) => setTimeout(res, 1200));
+        r = null;
+        setNetwork("waking");             // drives the "server is waking up" banner
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
+    if (r) setNetwork("ok");
     if (!r) {
       // The host may have moved or come back with a different address: forget the
       // cached answer so the next attempt probes again instead of staying broken.
       resolved = null; resolving = null;
       noteApiStatus("down");
-      const err: any = new Error("Cannot reach the MedAI server (" + base.replace(/^https?:\/\//, "") + "). If the site has been idle it can take up to a minute to wake up — please try again.");
+      setNetwork("down");
+      const err: any = new Error("The MedAI server did not answer after several tries (" + base.replace(/^https?:\/\//, "") + "). It may be waking up — press Retry, it usually loads within a minute.");
       err.network = true; err.cause = lastError;
       throw err;
     }
@@ -288,11 +335,27 @@ export const json = (body: any) => JSON.stringify(body);
 
 // Multipart upload (browser sets the boundary header itself).
 export async function postForm(path: string, form: FormData, token = ""): Promise<any> {
-  let r: Response;
-  try {
-    r = await fetch((await apiBase()) + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
-  } catch {
-    throw new Error("Network error while uploading. Check your connection.");
+  const base = await apiBase();
+  let r: Response | null = null;
+  // An upload after a quiet period hits the same cold start as any other call. The body is
+  // a File/Blob, so it can be sent again; a network failure means it never arrived.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((res) => setTimeout(res, RETRY_DELAYS[attempt]));
+    const control = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = control ? setTimeout(() => control.abort(), 120000) : null;   // uploads are slow
+    try {
+      r = await fetch(base + "/api" + path, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form, ...(control ? { signal: control.signal } : {}) });
+      setNetwork("ok");
+      break;
+    } catch {
+      setNetwork("waking");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  if (!r) {
+    setNetwork("down");
+    throw new Error("The upload did not reach the MedAI server. The server may still be waking up — press Retry; your file is still selected.");
   }
   const text = await r.text();
   let d: any = {};

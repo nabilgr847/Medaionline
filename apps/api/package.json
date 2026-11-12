@@ -7,7 +7,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "generate-signing-keys": "node ../../scripts/generate-prescription-signing-keys.js",
-    "test": "node --test ../../tests/util.test.js ../../tests/crypto-signing-smoke.test.js ../../tests/report-rules.test.js ../../tests/file-storage.test.js ../../tests/medicine-template.test.js ../../tests/email-otp.test.js ../../tests/ai.test.js ../../tests/fuzzy.test.js ../../tests/ads.test.js",
+    "test": "node --test ../../tests/util.test.js ../../tests/crypto-signing-smoke.test.js ../../tests/report-rules.test.js ../../tests/file-storage.test.js ../../tests/medicine-template.test.js ../../tests/email-otp.test.js ../../tests/ai.test.js ../../tests/fuzzy.test.js ../../tests/ads.test.js ../../tests/pwa.test.js",
     "test:crypto": "node --test ../../tests/crypto-signing-smoke.test.js"
   },
   "dependencies": {
