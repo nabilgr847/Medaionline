@@ -25,13 +25,6 @@
       "backgroundColor": "#092b46",
       "androidSplashResourceName": "splash",
       "androidScaleType": "CENTER_CROP"
-    },
-    "PushNotifications": {
-      "presentationOptions": [
-        "badge",
-        "sound",
-        "alert"
-      ]
     }
   }
 }

@@ -77,7 +77,8 @@ export async function checkBiometrics(): Promise<BiometricCheck> {
     const mod: any = await import("@aparajita/capacitor-biometric-auth");
     const result = await mod.BiometricAuth.checkBiometry();
     const type = TYPE_NAMES[Number(result?.biometryType)] || "none";
-    if (!result?.isAvailable) {
+    const usable = !!(result?.isAvailable || result?.deviceIsSecure);
+    if (!usable) {
       return {
         ok: false,
         type: "none",
@@ -85,7 +86,7 @@ export async function checkBiometrics(): Promise<BiometricCheck> {
         reason: result?.reason || "No fingerprint or face unlock is set up on this device. Add one in Android Settings → Security.",
       };
     }
-    return { ok: true, type: type === "none" ? "fingerprint" : type, available: true };
+    return { ok: true, type: type === "none" ? "device" : type, available: true };
   } catch (e: any) {
     return { ok: false, type: "none", available: false, reason: e?.message || "Biometric hardware is unavailable on this device." };
   }
@@ -100,20 +101,22 @@ export async function unlockWithBiometric(reason = "Unlock MedAI Hospital"): Pro
   }
   try {
     const mod: any = await import("@aparajita/capacitor-biometric-auth");
+    const weak = mod.AndroidBiometryStrength?.weak ?? mod.BiometryStrength?.weak;
     await mod.BiometricAuth.authenticate({
       reason,
-      cancelTitle: "Use password",
       androidTitle: "MedAI Hospital",
       androidSubtitle: reason,
-      allowDeviceCredential: false,
+      allowDeviceCredential: true,
       androidConfirmationRequired: false,
+      ...(weak !== undefined ? { androidBiometryStrength: weak } : {}),
     });
     return { ok: true };
   } catch (e: any) {
     const cancelled = e?.code === "userCancel" || e?.code === "systemCancel" || e?.code === "appCancel";
     const map: Record<string, string> = {
       authenticationFailed: "Fingerprint not recognised. Try again.",
-      biometryLockout: "Too many attempts. Unlock with your device PIN, then try again.",
+      biometryLockout: "Too many attempts. Unlock your phone with its PIN, then try again.",
+      userFallback: "Cancelled. Use your password instead.",
       biometryNotAvailable: "Biometric unlock is not available on this device.",
       biometryNotEnrolled: "No fingerprint or face is enrolled on this device.",
       passcodeNotSet: "Set a device PIN, pattern or password to use biometric unlock.",

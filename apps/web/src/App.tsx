@@ -80,9 +80,9 @@ function BiometricLock({ userName, onUnlock, onSignOut }: { userName?: string; o
     <div className="biolock-card">
       <div className="biolock-icon" aria-hidden="true">{"\uD83D\uDD12"}</div>
       <h2>MedAI Hospital is locked</h2>
-      <p className="muted">{userName ? "Welcome back, " + userName + "." : "Welcome back."} Confirm your fingerprint or face to continue.</p>
+      <p className="muted">{userName ? "Welcome back, " + userName + "." : "Welcome back."} Confirm your fingerprint, face or phone PIN to continue.</p>
       {note && <p className="warn" role="alert">{note}</p>}
-      <button className="primary" onClick={attempt} disabled={busy}>{busy ? "Waiting for fingerprint..." : "Unlock with fingerprint"}</button>
+      <button className="primary" onClick={attempt} disabled={busy}>{busy ? "Waiting for your phone..." : "Unlock with fingerprint / face"}</button>
       <button className="link" onClick={onSignOut}>Sign out and use password</button>
     </div>
   </div>;

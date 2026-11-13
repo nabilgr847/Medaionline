@@ -18,8 +18,8 @@ import { Api, json, fmtDate } from "./api";
 import { DoctorPicker } from "./extras";
 import { wifiOnly, setWifiOnly, looksMetered, webglAvailable } from "./anatomy";
 
-const MODEL_URL = "anatomy/body.glb";
-const PARTS_URL = "anatomy/body.parts.json";
+const MODEL_URL = "/anatomy/body.glb?v=7";
+const PARTS_URL = "/anatomy/body.parts.json?v=7";
 
 export type BodyPart = { id: number; name: string; system: string; layer?: string };
 export type PickedSpot = { id: number; name: string; system: string };

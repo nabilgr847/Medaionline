@@ -25,6 +25,10 @@ services:
         sync: false
       - key: ADMIN_RECOVERY_KEY
         generateValue: true
+      - key: WEBAUTHN_RP_ID
+        value: medaionline-1.onrender.com
+      - key: WEBAUTHN_ORIGINS
+        value: https://medaionline-1.onrender.com
       - key: CLIENT_ORIGIN
         value: https://medaionline-1.onrender.com,https://medaionline.onrender.com
       - key: APP_PUBLIC_URL
@@ -64,6 +68,8 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      - key: NODE_VERSION
+        value: "20.18.1"
       - key: VITE_API_URL
         fromService:
           type: web

@@ -16,7 +16,7 @@ self.addEventListener("notificationclick", (event) => {
   );
 });
 
-const CACHE = "medai-shell-v6";
+const CACHE = "medai-shell-v7";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/branding/medai-logo.svg"];
 
 /** Shown when the phone is offline and nothing was cached yet (first ever visit). */
