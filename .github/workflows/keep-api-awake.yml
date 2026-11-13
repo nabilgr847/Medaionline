@@ -1,0 +1,49 @@
+# © 2026 MD Gausur Rahman Nabil. All rights reserved. MedAI Hospital.
+# Keeps the Render service awake so the first visitor of the day does not wait 30-60 s.
+#
+# Render sleeps a free container after ~15 minutes of inactivity. A sleeping container is
+# the single biggest source of "network problem" reports: the first sign-in of the morning
+# times out before the server has booted.
+#
+# This workflow only calls the public health endpoint. It sends no data and stores nothing.
+name: keep-api-awake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"      # every 5 minutes; Render sleeps after ~15 min idle
+  workflow_dispatch:            # run it by hand from the Actions tab
+
+concurrency:
+  group: keep-api-awake
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake the API
+        env:
+          API: ${{ vars.MEDAI_API_URL || 'https://medaionline.onrender.com' }}
+        run: |
+          set -eu
+          url="${API%/}/api/health"
+          echo "Pinging $url"
+          # 3 attempts over ~2 minutes: a cold container may need a minute to boot.
+          for i in 1 2 3; do
+            body=$(curl -sS --max-time 90 "$url" || true)
+            echo "attempt $i: ${body:-<no answer>}"
+            case "$body" in
+              *'"status":"ok"'*|*'"status": "ok"'*)
+                echo "API is awake."
+                exit 0
+                ;;
+              *misconfigured*)
+                echo "::warning::The API is awake but reports missing environment variables."
+                exit 0
+                ;;
+            esac
+            sleep 30
+          done
+          # A failed ping must not turn the badge red: the API may be deploying.
+          echo "::warning::The API did not answer three times. It may be redeploying."
