@@ -77,6 +77,9 @@ export async function checkBiometrics(): Promise<BiometricCheck> {
     const mod: any = await import("@aparajita/capacitor-biometric-auth");
     const result = await mod.BiometricAuth.checkBiometry();
     const type = TYPE_NAMES[Number(result?.biometryType)] || "none";
+    // Many phones only offer a "weak" face unlock, or have a fingerprint the strict check rejects.
+    // The prompt can still be used when the phone has a screen lock, because it falls back to the
+    // device PIN/pattern, so only give up when there is truly nothing to unlock with.
     const usable = !!(result?.isAvailable || result?.deviceIsSecure);
     if (!usable) {
       return {
@@ -101,6 +104,9 @@ export async function unlockWithBiometric(reason = "Unlock MedAI Hospital"): Pro
   }
   try {
     const mod: any = await import("@aparajita/capacitor-biometric-auth");
+    // "weak" lets ordinary face unlock work (strong = fingerprint-grade only, which most phones'
+    // face unlock is not); allowDeviceCredential adds the phone PIN/pattern as the last resort so
+    // nobody is locked out. Both options are ignored by plugin builds that do not know them.
     const weak = mod.AndroidBiometryStrength?.weak ?? mod.BiometryStrength?.weak;
     await mod.BiometricAuth.authenticate({
       reason,

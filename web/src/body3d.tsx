@@ -18,6 +18,7 @@ import { Api, json, fmtDate } from "./api";
 import { DoctorPicker } from "./extras";
 import { wifiOnly, setWifiOnly, looksMetered, webglAvailable } from "./anatomy";
 
+// ?v= busts the old cached copy (service worker + browser) that hid the muscle layer on the website.
 const MODEL_URL = "/anatomy/body.glb?v=7";
 const PARTS_URL = "/anatomy/body.parts.json?v=7";
 
